@@ -1,0 +1,5 @@
+data/*.xlsx
+*.cache.pkl
+*.log
+.env
+__pycache__/
