@@ -673,7 +673,32 @@ def run() -> None:
                     scenario = "Polis + Sertifikat"
                     resolved = True
 
-        # FASE 1: POLIS
+        # FASE 1: PASS B (Polis + Slip)
+        if not matched_osbal_idx:
+            polis_vals = _collect_clean_values(sus, eff_polis)
+            slip_vals  = _collect_clean_values(sus, eff_slip)
+            if polis_vals and slip_vals:
+                p_hits = _exact_match(polis_vals, lookup_osbal[1])
+                s_hits = _exact_match(slip_vals,  lookup_osbal[0])
+                both_hits = p_hits & s_hits
+                if both_hits:
+                    matched_osbal_idx.update(both_hits)
+                    source = "OSBAL"
+                    scenario = "Polis + Slip"
+                    resolved = True
+                elif facul_rows:
+                    f_p = _exact_match(polis_vals, lookup_facul[1])
+                    f_s = _exact_match(slip_vals,  lookup_facul[0])
+                    f_both = f_p & f_s
+                    if f_both:
+                        res_idx, _ = _resolve_facode([facul_rows[i] for i in f_both], FACUL_FACODE_COL, facode_osbal_idx, osbal_rows)
+                        if res_idx:
+                            matched_osbal_idx.update(res_idx)
+                            source = "FACUL"
+                            scenario = "Polis + Slip"
+                            resolved = True
+
+        # FASE 2: POLIS
         if not matched_osbal_idx:
             polis_vals = _collect_clean_values(sus, eff_polis)
             if polis_vals:

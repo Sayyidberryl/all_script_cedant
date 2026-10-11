@@ -460,6 +460,10 @@ def _breakdown_all_rows(df: pd.DataFrame, col_insured: str, col_polis: str, col_
         pol_cln = clean_split_code(str(pol_val), skip_combined_if_cert=bool(cert)) if pd.notna(pol_val) else []
         slp_cln = clean_split_code(str(slp_val)) if pd.notna(slp_val) else []
 
+        if len(pol_cln) >= 2:
+            slp_cln = [pol_cln[1]]
+            pol_cln = [pol_cln[0]] + pol_cln[2:]
+
         insured_cln_all.append(ins_cln)
         polis_cln_all.append(pol_cln)
         slip_cln_all.append(slp_cln)
