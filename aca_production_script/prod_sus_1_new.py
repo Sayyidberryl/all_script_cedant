@@ -34,6 +34,8 @@ def _find_slipdb_file() -> str:
 
 def _find_bordero_file() -> str:
     kandidat = [
+        os.path.join(DATA_DIR, "BORDERO", "ACA_OPEN_COVER_MC.xlsx"),
+        os.path.join(DATA_DIR, "ACA_OPEN_COVER_MC.xlsx"),
         os.path.join(DATA_DIR, "ACA_Open_Cover_Marine_Cargo.xlsx"),
         os.path.join(DATA_DIR, "ACA_Database_Open_Cover_Marine_Cargo.xlsx"),
         os.path.join(DATA_DIR, "ACA_Database_Open_Cover_Marine_Hull.xlsx"),

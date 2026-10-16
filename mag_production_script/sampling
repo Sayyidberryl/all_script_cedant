@@ -1,0 +1,499 @@
+REPORT SUSPENSE MATCHING
+fac code : 24FDCK6O
+skenario : Insured only
+flagging : Adjustment sebagian dengan akumulasi
+polis : 45013124002553
+slip : 4501312400664
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 24FCAL9L
+skenario : Insured only
+flagging : Adjustment sebagian dengan akumulasi
+polis : 50013025003771
+slip : 5001302500235
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FBAFZJ
+skenario : Polis only
+flagging : Adjustment sebagian dengan akumulasi
+polis : 62013025000077-6/2
+slip : 6201302600001
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 24FDBK6O
+skenario : Polis + Slip
+flagging : Adjustment sebagian dengan akumulasi
+polis : 45013124001745-6/6
+slip : 4501312400417
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FSA0Y2
+skenario : Polis only
+flagging : Adjustment sebagian dengan akumulasi
+polis : 48013025002218-1/0
+slip : 4801302501320
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FRA77E
+skenario : Insured only
+flagging : Adjustment sebagian tanpa akumulasi
+polis : 08010925011872
+slip : 0801092500033
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 23FMADH1
+skenario : Insured only
+flagging : Adjustment sebagian tanpa akumulasi
+polis : 45031125000863-000002
+slip : 4503112501766
+certificate : 2
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FACTTM
+skenario : Polis only
+flagging : Adjustment sebagian tanpa akumulasi
+polis : 05010925023744
+slip : 0501092500614
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 241V454A
+skenario : Polis only
+flagging : Adjustment sebagian tanpa akumulasi
+polis : 45013125000883-2/0
+slip : 4501312500426
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FEAFVT
+skenario : Polis + Cert
+flagging : Adjustment sebagian tanpa akumulasi
+polis : 45031125001179-000001
+slip : 4503112502335
+certificate : 1
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 244E065F
+skenario : Insured only
+flagging : Adjustment total dengan akumulasi
+polis : 46013125009998
+slip : 4601312500483
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 253MB927
+skenario : Insured only
+flagging : Adjustment total dengan akumulasi
+polis : 40010525012483
+slip : 4001052500971
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25A1341A
+skenario : Polis + Slip
+flagging : Adjustment total dengan akumulasi
+polis : 45013025030067
+slip : 4501302545178
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 249I549B
+skenario : Polis + Slip
+flagging : Adjustment total dengan akumulasi
+polis : 45013225001124-1/1
+slip : 4501322500050
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FEAOI4
+skenario : Polis + Slip
+flagging : Adjustment total dengan akumulasi
+polis : 36011025000025
+slip : 3601102500001
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKAD0G
+skenario : Insured only
+flagging : Adjustment total tanpa akumulasi
+polis : 40031124000038-009288
+slip : 4003112500006
+certificate : 9288
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FEAAA0
+skenario : Insured only
+flagging : Adjustment total tanpa akumulasi
+polis : 40010925037686-1/0
+slip : 4001092501740
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FGAW8Z
+skenario : Polis only
+flagging : Adjustment total tanpa akumulasi
+polis : 40090125000146-1/0
+slip : 4009012500002
+certificate : -
+benar atau salah : salah
+desc : skenario yang dipakai adalah 'Polis only' padahal nomor slip (4009012500002) juga cocok dengan slip di OSBAL, seharusnya skenario 'Polis + Slip'.
+
+REPORT SUSPENSE MATCHING
+fac code : 24B4349C
+skenario : Polis only
+flagging : Adjustment total tanpa akumulasi
+polis : 05080325000019
+slip : 0508032500001
+certificate : -
+benar atau salah : salah
+desc : skenario yang dipakai adalah 'Polis only' padahal nomor slip (0508032500001) juga cocok dengan slip di OSBAL, seharusnya skenario 'Polis + Slip'.
+
+REPORT SUSPENSE MATCHING
+fac code : 241V454A
+skenario : Polis only
+flagging : Adjustment total tanpa akumulasi
+polis : 45013025001836
+slip : 4501302500747
+certificate : -
+benar atau salah : salah
+desc : skenario yang dipakai adalah 'Polis only' padahal nomor slip (4501302500747) juga cocok dengan slip di OSBAL, seharusnya skenario 'Polis + Slip'.
+
+REPORT SUSPENSE MATCHING
+fac code : 252F682A
+skenario : Insured only
+flagging : New Entry sebagian
+polis : 45013225015017
+slip : 001332/CN/45/08/25
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 252F682A
+skenario : Insured only
+flagging : New Entry sebagian
+polis : 45013025023536
+slip : 001311/CN/45/08/25
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKAJVF
+skenario : Polis only
+flagging : New Entry sebagian
+polis : 02031125000018-000306
+slip : BDO MAR 2025
+certificate : 306
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKAJVF
+skenario : Polis only
+flagging : New Entry sebagian
+polis : 02031125000018-000171
+slip : BDO FEB 2025
+certificate : 171
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FSADYT
+skenario : Slip only
+flagging : New Entry sebagian
+polis : 15010525001226
+slip : 1501052500006
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 24S4941A
+skenario : Insured only
+flagging : New Entry total
+polis : 40012125044496
+slip : 4001212500783
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 215AA717
+skenario : Insured only
+flagging : New Entry total
+polis : 45013224015367-12/6
+slip : 4501322415047
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis dan slip suspend tidak ada di osbal sehingga match melalui insured, skenario Insured only benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 23FSBWMM
+skenario : Polis + Slip
+flagging : New Entry total
+polis : 45013023033011-5/2
+slip : 4501302332788
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKFJVF
+skenario : Polis + Cert
+flagging : New Entry total
+polis : 02031125000018-000656
+slip : BDO JUN 2025
+certificate : 656
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKKJVF
+skenario : Polis + Cert
+flagging : New Entry total
+polis : 02031125000018-001478
+slip : BDO NOV 2025
+certificate : 1478
+benar atau salah : benar
+desc : ada di osbal, skenario benar, akumulasi benar, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 23B5074B, 24B5074A, 23B5074A, 23B5074C
+skenario : Insured only (> 1 Fac)
+flagging : Matching >1 fac code
+polis : 45013021018792-4/1
+slip : 4501302126174
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis terdaftar di beberapa FAC dan tidak ada slip/sertifikat yang bisa mempersempit ke 1 FAC, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 24FSA9YC, 23FSA9YC, 25FSAWXJ, 22FSA9YC, 23FSAWXJ, 24FSAWXJ, 22FSAWXJ
+skenario : Insured only (> 1 Fac)
+flagging : Matching >1 fac code
+polis : 40010925043387-2/2
+slip : 4001092502261
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, polis terdaftar di beberapa FAC dan tidak ada slip/sertifikat yang bisa mempersempit ke 1 FAC, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 23FKPK6X, 23FKQK6X, 23FKSK6X, 23FKRK6X, 23FKMK6X, 23FKNK6X, 23FKOK6X
+skenario : Polis only (> 1 Fac)
+flagging : Matching >1 fac code
+polis : 02031124000016-001646
+slip : BDO DES 2024
+certificate : 1646
+benar atau salah : benar
+desc : ada di osbal, polis terdaftar di beberapa FAC dan tidak ada slip/sertifikat yang bisa mempersempit ke 1 FAC, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKAJVF, 25FKFJVF, 25FKHJVF, 25FKDJVF, 25FKEJVF
+skenario : Polis only (> 1 Fac)
+flagging : Matching >1 fac code
+polis : 02031125000018-000930
+slip : BDO JUL 2025
+certificate : 930
+benar atau salah : benar
+desc : ada di osbal, polis terdaftar di beberapa FAC dan tidak ada slip/sertifikat yang bisa mempersempit ke 1 FAC, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FKAJVF, 25FKJJVF, 25FKFJVF, 25FKHJVF, 25FKDJVF, 25FKEJVF
+skenario : Polis only (> 1 Fac)
+flagging : Matching >1 fac code
+polis : 02031125000018-001211
+slip : BDO SEP 2025
+certificate : 1211
+benar atau salah : benar
+desc : ada di osbal, polis terdaftar di beberapa FAC dan tidak ada slip/sertifikat yang bisa mempersempit ke 1 FAC, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 252F682A
+skenario : Insured only (Beda Currency)
+flagging : Beda Currency
+polis : 45013225016166
+slip : 4501322527860
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, currency suspend berbeda dengan OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 252F682A
+skenario : Insured only (Beda Currency)
+flagging : Beda Currency
+polis : 45013025026209
+slip : 4501302541934
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, currency suspend berbeda dengan OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 22S2D391, 22S2C391
+skenario : Polis only (Beda Currency)
+flagging : Beda Currency
+polis : 45013022023211-000006-5/2
+slip : 4501302226298
+certificate : 6
+benar atau salah : benar
+desc : ada di osbal, skenario benar, currency suspend berbeda dengan OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 24FDFLST
+skenario : Polis + Slip (Beda Currency)
+flagging : Beda Currency
+polis : 45013025001494-2/0
+slip : 4501302501414
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, currency suspend berbeda dengan OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 24FDFLST
+skenario : Polis + Slip (Beda Currency)
+flagging : Beda Currency
+polis : 45013025001494-2/0
+slip : 4501302501414
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, currency suspend berbeda dengan OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 25FPA2TG
+skenario : Insured only (Beda Periode)
+flagging : Beda Periode
+polis : 40100424003679-2/1
+slip : 4010042400035
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, tanggal suspend mendahului commencement date OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 26FBAIOI
+skenario : Insured only (Beda Periode)
+flagging : Beda Periode
+polis : 36011026000027
+slip : 3601102600001
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, tanggal suspend mendahului commencement date OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 26FBAIOI
+skenario : Polis only (Beda Periode)
+flagging : Beda Periode
+polis : 45013026007232
+slip : 4501302613327
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, tanggal suspend mendahului commencement date OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 26FBAIOI
+skenario : Polis only (Beda Periode)
+flagging : Beda Periode
+polis : 45013226005085
+slip : 4501322510135
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, tanggal suspend mendahului commencement date OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : 26FBAIOI
+skenario : Polis only (Beda Periode)
+flagging : Beda Periode
+polis : 45013226005085
+slip : 4501322510135
+certificate : -
+benar atau salah : benar
+desc : ada di osbal, skenario benar, tanggal suspend mendahului commencement date OSBAL, flagging benar
+
+REPORT SUSPENSE MATCHING
+fac code : -
+skenario : Unmatching
+flagging : Unmatching
+polis : 50013025002906
+slip : 5001302500189
+certificate : -
+benar atau salah : benar
+desc : tidak ada di osbal, nomor polis dan slip memang belum terdaftar di sistem OSBAL/FACUL, unmatch benar
+
+REPORT SUSPENSE MATCHING
+fac code : -
+skenario : Unmatching
+flagging : Unmatching
+polis : 03010926000301
+slip : 0301092600001
+certificate : -
+benar atau salah : benar
+desc : tidak ada di osbal, nomor polis dan slip memang belum terdaftar di sistem OSBAL/FACUL, unmatch benar
+
+REPORT SUSPENSE MATCHING
+fac code : -
+skenario : Unmatching
+flagging : Unmatching
+polis : 50013224000779-1/0
+slip : 5001312500036
+certificate : -
+benar atau salah : benar
+desc : tidak ada di osbal, nomor polis dan slip memang belum terdaftar di sistem OSBAL/FACUL, unmatch benar
+
+REPORT SUSPENSE MATCHING
+fac code : -
+skenario : Unmatching
+flagging : Unmatching
+polis : 45080325004292
+slip : 4508032501405
+certificate : -
+benar atau salah : benar
+desc : tidak ada di osbal, nomor polis dan slip memang belum terdaftar di sistem OSBAL/FACUL, unmatch benar
+
+REPORT SUSPENSE MATCHING
+fac code : -
+skenario : Unmatching
+flagging : Unmatching
+polis : 45013025006444-1/1
+slip : 4501302502809
+certificate : -
+benar atau salah : benar
+desc : tidak ada di osbal, nomor polis dan slip memang belum terdaftar di sistem OSBAL/FACUL, unmatch benar

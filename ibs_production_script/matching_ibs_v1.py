@@ -1462,10 +1462,13 @@ def _load_excel(path: str, label: str, optional: bool = False) -> tuple:
     t = time.perf_counter()
     print(f"  {label}: {path} ...", flush=True)
     try:
-        df = pd.read_excel(path)
-    except Exception as e:
-        print(f"  [RETRY] engine default gagal ({e}), coba openpyxl ...", flush=True)
-        df = pd.read_excel(path, engine="openpyxl")
+        df = pd.read_excel(path, engine="calamine")
+    except Exception:
+        try:
+            df = pd.read_excel(path)
+        except Exception as e:
+            print(f"  [RETRY] engine default gagal ({e}), coba openpyxl ...", flush=True)
+            df = pd.read_excel(path, engine="openpyxl")
 
     header = list(df.columns)
     data   = df.to_dict("records")
@@ -2281,17 +2284,80 @@ def run() -> None:
         print(f"  [WARN] Styling gagal: {e}")
 
     # Export ke PostgreSQL
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    load_dotenv(env_path)
     load_dotenv()
     print("  Exporting ke PostgreSQL ...")
-    conn_str = "postgresql+psycopg2://{}:{}@{}:{}/{}".format(
-        os.environ.get("DB_USER", "postgres"), os.environ.get("DB_PASS", "postgres"),
-        os.environ.get("DB_HOST", "localhost"), os.environ.get("DB_PORT", "5432"),
-        os.environ.get("DB_NAME", "postgres"),
-    )
+    db_user = os.environ.get("DB_USER", "viy4user")
+    db_pass = os.environ.get("DB_PASS", "fild42op61nx")
+    db_host = os.environ.get("DB_HOST", "10.10.125.91")
+    db_port = os.environ.get("DB_PORT", "5432")
+    db_name = os.environ.get("DB_NAME", "fsi_db")
+    conn_str = f"postgresql+psycopg2://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+
     try:
+        from sqlalchemy import text
         engine = create_engine(conn_str)
-        df.to_sql("SUSPENSE_DATA_SUSPENSE_IBS_V1", con=engine, if_exists="append", index=False)
+
+        # 1. Export ke tabel khusus IBS (SUSPENSE_DATA_SUSPENSE_IBS_V1)
+        with engine.begin() as con:
+            con.execute(text('DROP TABLE IF EXISTS "SUSPENSE_DATA_SUSPENSE_IBS_V1";'))
+        df.to_sql("SUSPENSE_DATA_SUSPENSE_IBS_V1", con=engine, if_exists="replace", index=False)
         print(f"      -> {len(df):,} rows berhasil di-export ke 'SUSPENSE_DATA_SUSPENSE_IBS_V1'")
+
+        # 2. Export ke tabel shared production (SUSPENSE_DATA_SUSPENSE_V1 & SUSPENSE_CLEAN_2026)
+        df_shared = df.copy()
+        rename_map = {
+            "POLIS_ORI": "POLIS",
+            "SLIP_NO_ORI": "SLIP_NO",
+        }
+        df_shared.rename(columns=rename_map, inplace=True)
+
+        if "RECEIPT DATE" in df_shared.columns:
+            df_shared["RECEIPT DATE"] = pd.to_datetime(df_shared["RECEIPT DATE"], errors="coerce").dt.date
+            df_shared["RECEIPT DATE"] = df_shared["RECEIPT DATE"].where(df_shared["RECEIPT DATE"].notnull(), None)
+
+        numeric_cols = ["AMOUNT ORI", "AMOUNT_ORI_MIN1", "AMOUNT PAY", "CCOS_OR_BAL", "CCOS_BAL_DUE", "DIFERENCE"]
+        for c in numeric_cols:
+            if c in df_shared.columns:
+                df_shared[c] = pd.to_numeric(df_shared[c], errors="coerce")
+
+        shared_cols = [
+            "CCOS_DOC_NO", "CCOS_REF_CODE",
+            "RECEIPT NO", "CREDIT NOTES", "DETAIL RINCIAN NO", "RECEIPT DATE",
+            "CEDANT NAME", "CEDANT SHRT NAME",
+            "INSURED_ORI", "INSURED_1", "INSURED_2",
+            "CURR ORI", "AMOUNT ORI", "AMOUNT_ORI_MIN1",
+            "CURR PAY", "AMOUNT PAY",
+            "CCOS_OR_BAL", "CCOS_BAL_DUE", "DIFERENCE",
+            "FLAG_PROD",
+            "POLIS",
+            "POLICY_CLEAN_1", "SERTIF_CLEAN_1",
+            "POLICY_CLEAN_2", "SERTIF_CLEAN_2",
+            "POLICY_CLEAN_3", "SERTIF_CLEAN_3",
+            "POLICY_CLEAN_4", "POLICY_CLEAN_5",
+            "SLIP_NO", "SLIP_NO_CLN",
+            "DESC 1", "DESC 2", "DESC 3", "DESC 4",
+            "STATUS", "REC_TYPE",
+            "SKENARIO"
+        ]
+        for c in shared_cols:
+            if c not in df_shared.columns:
+                df_shared[c] = None
+
+        text_cols = [c for c in shared_cols if c not in numeric_cols and c != "RECEIPT DATE"]
+        for c in text_cols:
+            df_shared[c] = df_shared[c].astype(str).str.strip()
+            df_shared[c] = df_shared[c].replace({"nan": None, "None": None, "": None})
+
+        df_shared = df_shared[shared_cols]
+
+        with engine.begin() as con:
+            con.execute(text('DELETE FROM "SUSPENSE_DATA_SUSPENSE_V1" WHERE "CEDANT NAME" LIKE \'%IBS%\';'))
+            con.execute(text('DELETE FROM "SUSPENSE_CLEAN_2026" WHERE "CEDANT NAME" LIKE \'%IBS%\';'))
+        df_shared.to_sql("SUSPENSE_DATA_SUSPENSE_V1", con=engine, if_exists="append", index=False)
+        df_shared.to_sql("SUSPENSE_CLEAN_2026", con=engine, if_exists="append", index=False)
+        print(f"      -> {len(df_shared):,} rows berhasil di-export ke 'SUSPENSE_DATA_SUSPENSE_V1' & 'SUSPENSE_CLEAN_2026'")
     except Exception as e:
         print(f"  [WARN] PostgreSQL export gagal: {e}")
 

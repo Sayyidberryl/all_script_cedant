@@ -104,8 +104,6 @@ OSBAL_DATE_COL   = "FAC_COM_DATE"
 # Marker baris administratif yang dikecualikan dari matching
 _EXCLUDED_REF_MARKERS = ["HUTANG PIUTANG", "DATA SUSPENSE"]
 
-# Marker LINESLIP — pakai RECEIPT DATE - 1 bulan sebagai tanggal efektif
-_LINESLIP_MARKERS = ("LINESLIP", "LINE SLIP")
 
 # Prefix kolom bersih
 SUSPEND_SERTIF_PREFIX = _SUS_SERTIF_PREFIX
@@ -343,14 +341,6 @@ def _is_excluded_ref_row(row: dict, polis_cols: list, slip_cols: list) -> bool:
     return False
 
 
-def _is_lineslip_row(sus_row: dict, insured_cols: list) -> bool:
-    for col in insured_cols:
-        val = str(sus_row.get(col, "") or "").upper()
-        if any(marker in val for marker in _LINESLIP_MARKERS):
-            return True
-    return False
-
-
 def _collect_clean_values(row: dict, cols: list) -> list:
     if not cols:
         return []
@@ -529,7 +519,7 @@ def _rematch_strict(
     slipdb_rows: list = None, lookup_slipdb: tuple = None,
     facul_rows: list = None, lookup_facul: tuple = None,
     polis_sus_like_cols: list = None,
-    effective_sus_date=None, is_lineslip: bool = False
+    effective_sus_date=None
 ) -> tuple:
     sus_curr = _normalize(suspend_row.get(SUSPEND_CURR_COL, ""))
 
@@ -541,12 +531,8 @@ def _rematch_strict(
             if pd.notna(effective_sus_date):
                 com_date = osbal_rows[i].get("_com_date_parsed")
                 if pd.notna(com_date):
-                    if is_lineslip:
-                        if com_date.year != effective_sus_date.year or com_date.month != effective_sus_date.month:
-                            continue
-                    else:
-                        if effective_sus_date < com_date:
-                            continue
+                    if effective_sus_date < com_date:
+                        continue
             res.append(i)
         return res
 
@@ -1201,24 +1187,6 @@ def run() -> None:
     insured_facul = _get_cols_for(facul_cols, "facul", "insured")
     sertif_facul  = _get_cols_for(facul_cols, "facul", "sertif")
 
-    # Lineslip parsing
-    print("  Pre-parsing LINESLIP flags ...", flush=True)
-    lineslip_count = 0
-    for _row in suspend_rows:
-        _row["_is_lineslip"] = _is_lineslip_row(_row, list(insured_sus) + [SUS_INSURED_ORI_COL])
-        if _row["_is_lineslip"]:
-            lineslip_count += 1
-            _parsed = _row.get("_sus_date_parsed")
-            if _parsed is not None:
-                try:
-                    _row["_sus_date_lineslip"] = _parsed - pd.DateOffset(months=1)
-                except Exception:
-                    _row["_sus_date_lineslip"] = None
-            else:
-                _row["_sus_date_lineslip"] = None
-        else:
-            _row["_sus_date_lineslip"] = None
-    print(f"  -> {lineslip_count:,} baris LINESLIP terdeteksi", flush=True)
 
     def _prepend(col: str, cols_list: list, header: list) -> list:
         return ([col] + cols_list) if col in header and col not in cols_list else cols_list
@@ -1282,8 +1250,7 @@ def run() -> None:
             continue
 
         eff_polis, eff_slip, like_polis, like_slip = _get_effective_sus_cols(sus, polis_sus, slip_sus)
-        _is_ls = sus.get("_is_lineslip", False)
-        effective_date = sus.get("_sus_date_lineslip") if _is_ls else sus.get("_sus_date_parsed")
+        effective_date = sus.get("_sus_date_parsed")
 
         matched_fac_codes = set()
         matched_osbal_idx = set()
@@ -1374,12 +1341,8 @@ def run() -> None:
                         if pd.isna(com_date):
                             filtered_per.append(i)
                         else:
-                            if _is_ls:
-                                if com_date.year == sus_date.year and com_date.month == sus_date.month:
-                                    filtered_per.append(i)
-                            else:
-                                if sus_date >= com_date:
-                                    filtered_per.append(i)
+                            if sus_date >= com_date:
+                                filtered_per.append(i)
                     if not filtered_per:
                         is_beda_per = True
                     elif len(filtered_per) < len(matched_list):
@@ -1394,7 +1357,7 @@ def run() -> None:
                     slipdb_rows, lookup_slipdb,
                     facul_rows, lookup_facul,
                     like_polis,
-                    effective_sus_date=effective_date, is_lineslip=_is_ls
+                    effective_sus_date=effective_date
                 )
                 if rm:
                     src, scen, hits, _ = rm

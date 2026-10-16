@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import re
 import sys
@@ -89,7 +90,7 @@ BORDERO_NET_COL     = "NET"          # kolom premi/rate per sertifikat di Open C
 # 'sum_all'    : jumlahkan semua NET per FAC CODE
 # 'sum_by_curr': jumlah NET per FAC CODE per currency
 NET_MATCH_MODE    = "per_row"
-NET_TOLERANCE_PCT = 0.01   # toleransi 1% flat dari AMOUNT ORI
+NET_TOLERANCE_PCT = 0.0   # toleransi 0% (exact match)
 
 # Mapping nama bulan Indonesia -> nomor bulan
 _BULAN_MAP = {
@@ -127,9 +128,6 @@ OSBAL_DATE_COL   = "FAC_COM_DATE"  # OSBAL   (data 2): tanggal awal pertanggunga
 # BUKAN transaksi riil — harus dikecualikan dari index matching.
 _EXCLUDED_REF_MARKERS = ["HUTANG PIUTANG", "DATA SUSPENSE"]
 
-# LINESLIP treatment markers — jika insured suspend mengandung salah satu ini,
-# RECEIPT DATE + 1 bulan digunakan sebagai tanggal efektif untuk cek periode OSBAL.
-_LINESLIP_MARKERS = ("LINESLIP", "LINE SLIP")
 
 # CLSDT general terms yang harus dianggap kosong (fallback ke FAC)
 _GENERAL_CLSDT_MARKERS = {"TBA", "VARIOUS", "P"}
@@ -248,18 +246,6 @@ def _tokens_intersect(tokens_a: frozenset, tokens_b: frozenset) -> bool:
     return False
 
 
-def _is_lineslip_row(row: dict, check_cols: list) -> bool:
-    """True jika salah satu kolom yang dicek mengandung 'LINESLIP' atau 'LINE SLIP'.
-
-    Treatment: RECEIPT DATE + 1 bulan digunakan sebagai tanggal efektif untuk
-    perbandingan dengan FAC_COM_DATE (OSBAL) — karena pembayaran LINESLIP selalu
-    datang satu bulan setelah FAC_COM_DATE.
-    """
-    for col in check_cols:
-        val = _normalize(row.get(col, ""))
-        if val and any(m in val for m in _LINESLIP_MARKERS):
-            return True
-    return False
 
 
 def _get_clean_cols(columns: list, prefix: str) -> list:
@@ -811,22 +797,12 @@ def _narrow_by_periode(
     - Jika semua kandidat melanggar rule (atau tanggal tidak tersedia),
       list asli dikembalikan tanpa perubahan -- narrowing adalah preferential,
       bukan eliminatif. Deteksi akhir dilakukan di run() dan ditag 'Beda Periode'.
-
-    LINESLIP TREATMENT:
-    - Jika suspend_row ATAU OSBAL candidate memiliki flag _is_lineslip = True:
-      target FAC_COM_DATE = RECEIPT DATE - 1 bulan.
-    - Perbandingan EXACT bulan+tahun: FAC_COM_DATE harus sama bulan & tahun dengan
-      (RECEIPT DATE - 1 bulan). Lebih atau kurang sebulan -> kandidat dibuang (eliminatif).
-
-    OPTIMASI: Menggunakan '_sus_date_parsed', '_sus_date_lineslip' dan '_com_date_parsed' (pre-parsed)
-    untuk menghindari pemanggilan pd.to_datetime() berulang di setiap kandidat.
     """
     if len(matched) <= 1:
         return matched
 
     # Tentukan tanggal efektif suspend
     sus_date_normal = suspend_row.get("_sus_date_parsed", "__MISSING__")
-    sus_date_ls     = suspend_row.get("_sus_date_lineslip", None)
 
     if sus_date_normal == "__MISSING__":
         sus_date_raw = suspend_row.get(SUSPEND_DATE_COL, "")
@@ -834,14 +810,11 @@ def _narrow_by_periode(
             return matched
         try:
             sus_date_normal = pd.to_datetime(sus_date_raw, errors="raise")
-            sus_date_ls     = sus_date_normal - pd.DateOffset(months=1)
         except Exception:
             return matched
 
     if sus_date_normal is None:
         return matched
-
-    sus_is_ls = suspend_row.get("_is_lineslip", False)
 
     valid = []
     for i in matched:
@@ -862,16 +835,9 @@ def _narrow_by_periode(
             continue
 
         try:
-            is_ls = sus_is_ls or rows[i].get("_is_lineslip", False)
-            if is_ls and sus_date_ls is not None:
-                # LINESLIP: FAC_COM_DATE harus TEPAT sama bulan & tahun dengan
-                # (RECEIPT DATE - 1 bulan). Lebih atau kurang -> dibuang.
-                if com_date.year == sus_date_ls.year and com_date.month == sus_date_ls.month:
-                    valid.append(i)
-            else:
-                # Normal: RECEIPT DATE >= FAC_COM_DATE
-                if sus_date_normal >= com_date:
-                    valid.append(i)
+            # Normal: RECEIPT DATE >= FAC_COM_DATE
+            if sus_date_normal >= com_date:
+                valid.append(i)
         except Exception:
             valid.append(i)  # tidak bisa di-parse -> tidak disaring
 
@@ -1390,7 +1356,7 @@ def _narrow_by_amount_net(
     tolerance_pct: float = NET_TOLERANCE_PCT,
     mode:          str   = NET_MATCH_MODE,
 ) -> tuple:
-    """Last choice: |AMOUNT ORI| ≈ NET di Open Cover untuk tepat 1 fac code.
+    """Last choice: |AMOUNT ORI| ~= NET di Open Cover untuk tepat 1 fac code.
 
     Mode 'per_row': bandingkan abs(AMOUNT ORI) dengan NET tiap baris.
     Mode 'sum_all': jumlahkan semua NET per fac code, bandingkan total.
@@ -1441,20 +1407,28 @@ def _narrow_by_amount_net(
         if mode == "per_row":
             for e in entries:
                 net = _net_float(e)
-                if net is not None and abs(abs(net) - amount_ori) <= tolerance:
-                    matched_facs.add(fac); break
+                if net is not None:
+                    diff = abs(abs(net) - amount_ori)
+                    if (tolerance == 0.0 and round(abs(net), 2) == round(amount_ori, 2)) or (tolerance > 0.0 and diff <= tolerance):
+                        matched_facs.add(fac); break
         elif mode == "sum_all":
             nets = [_net_float(e) for e in entries if _net_float(e) is not None]
-            if nets and abs(abs(sum(nets)) - amount_ori) <= tolerance:
-                matched_facs.add(fac)
+            if nets:
+                total_net = abs(sum(nets))
+                diff = abs(total_net - amount_ori)
+                if (tolerance == 0.0 and round(total_net, 2) == round(amount_ori, 2)) or (tolerance > 0.0 and diff <= tolerance):
+                    matched_facs.add(fac)
         elif mode == "sum_by_curr":
             sus_curr = _normalize(suspend_row.get(SUSPEND_CURR_COL, ""))
             nets = [
                 _net_float(e) for e in entries
                 if _net_float(e) is not None and _normalize(e.get("curr", "")) == sus_curr
             ] if sus_curr else [_net_float(e) for e in entries if _net_float(e) is not None]
-            if nets and abs(abs(sum(nets)) - amount_ori) <= tolerance:
-                matched_facs.add(fac)
+            if nets:
+                total_net = abs(sum(nets))
+                diff = abs(total_net - amount_ori)
+                if (tolerance == 0.0 and round(total_net, 2) == round(amount_ori, 2)) or (tolerance > 0.0 and diff <= tolerance):
+                    matched_facs.add(fac)
 
     return (matched_facs, True) if len(matched_facs) == 1 else (fac_codes, False)
 
@@ -1840,30 +1814,6 @@ def run() -> None:
     insured_osbal = _get_clean_cols(osbal_cols, "clean insured")
     sertif_osbal  = _get_clean_cols(osbal_cols, "clean sertif")
 
-    # Pre-parse LINESLIP flags untuk OSBAL
-    print("  Pre-parsing OSBAL LINESLIP flags ...", flush=True)
-    osbal_ls_cols = polis_osbal + slip_osbal + insured_osbal + ["polis_ori", "slip_ori", "insured_ori"]
-    for _row in osbal_rows:
-        _row["_is_lineslip"] = _is_lineslip_row(_row, osbal_ls_cols)
-
-    # Pre-parse LINESLIP flags (harus setelah insured_sus diketahui)
-    print("  Pre-parsing Suspend LINESLIP flags ...", flush=True)
-    lineslip_count = 0
-    for _row in suspend_rows:
-        _row["_is_lineslip"] = _is_lineslip_row(_row, list(insured_sus) + ["insured_ori"])
-        if _row["_is_lineslip"]:
-            lineslip_count += 1
-        # Selalu hitung _sus_date_lineslip (RECEIPT DATE - 1 bulan) karena
-        # kandidat OSBAL-nya mungkin lineslip.
-        _parsed = _row.get("_sus_date_parsed")
-        if _parsed is not None:
-            try:
-                _row["_sus_date_lineslip"] = _parsed - pd.DateOffset(months=1)
-            except Exception:
-                _row["_sus_date_lineslip"] = None
-        else:
-            _row["_sus_date_lineslip"] = None
-    print(f"  -> {lineslip_count:,} baris Suspend LINESLIP terdeteksi", flush=True)
 
     polis_osbal   = _get_clean_cols(osbal_cols, "clean polis")
     slip_osbal    = _get_clean_cols(osbal_cols, "clean slip")
@@ -2074,24 +2024,18 @@ def run() -> None:
 
         # Periode check (ATURAN BEDA PERIODE): setelah source final diketahui
         # Hanya berlaku saat match ada, bukan Beda Currency.
-        #
-        # NON-LINESLIP: RECEIPT DATE >= FAC_COM_DATE (bayar setelah periode mulai).
-        # LINESLIP    : FAC_COM_DATE harus TEPAT = RECEIPT DATE - 1 bulan (exact month+year).
-        #               Lebih atau kurang -> 'Beda Periode'.
+        # Periode check (ATURAN BEDA PERIODE): setelah source final diketahui
         if (source is not None and osbal_ref and osbal_ref[0]
                 and scenario != "Beda Currency"):
 
             all_beda = True
-            sus_is_ls = sus.get("_is_lineslip", False)
             sus_date_normal = sus.get("_sus_date_parsed")
-            sus_date_ls = sus.get("_sus_date_lineslip")
 
             for r in osbal_ref:
                 if not r:
                     all_beda = False
                     break
                 
-                is_ls = sus_is_ls or r.get("_is_lineslip", False)
                 com_date = r.get("_com_date_parsed", "__MISSING__")
                 if com_date == "__MISSING__":
                     com_raw = r.get(OSBAL_DATE_COL, "")
@@ -2109,14 +2053,9 @@ def run() -> None:
                     break
 
                 try:
-                    if is_ls and sus_date_ls is not None:
-                        if com_date.year == sus_date_ls.year and com_date.month == sus_date_ls.month:
-                            all_beda = False
-                            break
-                    elif not is_ls and sus_date_normal is not None:
-                        if sus_date_normal >= com_date:
-                            all_beda = False
-                            break
+                    if sus_date_normal is not None and sus_date_normal >= com_date:
+                        all_beda = False
+                        break
                 except Exception:
                     all_beda = False
                     break

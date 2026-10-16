@@ -22,17 +22,21 @@
    4. clean_insured: logika custom yang berbeda total
    ============================================================================= */
 
-options mprint mlogic symbolgen;
+options validvarname=any validmemname=extend mprint symbolgen;
 
 /* ── 0. Path setup ─────────────────────────────────────────────────────────── */
-%let BASE_DIR   = %str(C:\Users\berryl\Desktop\starcore\indore\production_script);
+%if not %symexist(BASE_DIR) %then %do;
+    %let BASE_DIR = %str(c:\Users\berryl\Desktop\starcore\indore\all_script_cedant\aca_production_script);
+%end;
 %let DATA_DIR   = %str(&BASE_DIR.\data);
 %let INPUT_FILE = %str(&DATA_DIR.\suspend.xlsx);
 %let OUT_FILE   = %str(&DATA_DIR.\suspend_clean_aca.xlsx);
 %let MACRO_INC  = %str(&BASE_DIR.\sas_ready\macros_cleaning.sas);
 
 /* ── 1. Include shared macros ──────────────────────────────────────────────── */
-%include "&MACRO_INC.";
+%if %sysfunc(fileexist("&MACRO_INC.")) %then %do;
+    %include "&MACRO_INC.";
+%end;
 
 /* ── 2. Konstanta bisnis ──────────────────────────────────────────────────── */
 %let CEDANT_COL   = %str(CEDANT SHRT NAME);
@@ -49,7 +53,7 @@ options mprint mlogic symbolgen;
 /* =============================================================================
    STEP 1: Baca file Excel
    PENTING: suspend.xlsx punya header di baris ke-3 (0-indexed = header=2 di pandas)
-   → di SAS: datarow=4 (baris data mulai dari baris ke-4, header di baris ke-3)
+   -> di SAS: datarow=4 (baris data mulai dari baris ke-4, header di baris ke-3)
    ============================================================================= */
 %put [1/5] Reading: &INPUT_FILE. (header di baris ke-3) ...;
 
@@ -103,18 +107,20 @@ run;
    Logika BERBEDA dari facul/osbal:
    Hanya strip suffix numeric/EXT setelah dash, loop sampai tidak ada lagi.
    Contoh:
-     '100030825120000155-001-002' → '100030825120000155'
-     '210010421100000031-1/1'    → '210010421100000031'
-     '100030825120000155-EXT(3)' → '100030825120000155'
+     '100030825120000155-001-002' -> '100030825120000155'
+     '210010421100000031-1/1'    -> '210010421100000031'
+     '100030825120000155-EXT(3)' -> '100030825120000155'
    ============================================================================= */
 %macro apply_clean_polis_suspend(in_var);
-    length clean_polis_1 $500;
-    array _cps_dummy{5} $500 clean_polis_2-clean_polis_5; /* kosong untuk suspend */
-    do _i_ = 1 to 5; if _i_ > 1 then _cps_dummy{_i_-1} = ''; end;
+    length clean_polis_1 - clean_polis_5 $500;
     clean_polis_1 = '';
+    clean_polis_2 = '';
+    clean_polis_3 = '';
+    clean_polis_4 = '';
+    clean_polis_5 = '';
 
     _polis_sus_ = strip(&in_var.);
-    if not missing(_polis_sus_) and _polis_sus_ ne '' then do;
+    if not missing(_polis_sus_) and not (_polis_sus_ in ('', '0', '-')) then do;
         _prev_sus_ = '';
         do while (_polis_sus_ ne _prev_sus_);
             _prev_sus_ = _polis_sus_;
@@ -126,7 +132,7 @@ run;
         end;
         if _polis_sus_ ne '' then clean_polis_1 = _polis_sus_;
     end;
-    drop _polis_sus_ _prev_sus_ _i_;
+    drop _polis_sus_ _prev_sus_;
 %mend apply_clean_polis_suspend;
 
 
@@ -173,10 +179,10 @@ run;
     /* -- 5b. Pre-processing ------------------------------------------------- */
     /* Hapus angka dalam kurung */
     _ins_sus_ = prxchange('s/\(\s*[\d\.\/\-]+\s*\)//o', -1, _ins_sus_);
-    /* AND OR / AND OR → koma */
+    /* AND OR / AND OR -> koma */
     _ins_sus_ = prxchange('s/\b(?:AND|AN|OR)\s*\/\s*(?:AND|OR)\b/,/oi', -1, _ins_sus_);
     _ins_sus_ = prxchange('s/\bAND\s+OR\b/,/oi', -1, _ins_sus_);
-    /* CO., LTD. → koma */
+    /* CO., LTD. -> koma */
     _ins_sus_ = prxchange('s/\bCO\.,?\s*LTD\.?\b/,/oi', -1, _ins_sus_);
     /* Strip TBK, PERSERO, LTD */
     _ins_sus_ = prxchange('s/\bTBK\.?\b//oi',        -1, _ins_sus_);
@@ -187,20 +193,20 @@ run;
 
     /* -- 5c. Split ---------------------------------------------------------- */
     /* Ganti delimiter ke '|' untuk kemudahan scan */
-    /* QQ → | */
+    /* QQ -> | */
     _ins_sus_ = prxchange('s/\bQQ\b/|/oi', -1, _ins_sus_);
-    /* Slash → | */
+    /* Slash -> | */
     _ins_sus_ = prxchange('s/\// |/o', -1, _ins_sus_);
-    /* Koma → | */
+    /* Koma -> | */
     _ins_sus_ = prxchange('s/,/|/o', -1, _ins_sus_);
-    /* Dash (kecuali sebelum tahun 19xx/20xx) → | */
+    /* Dash (kecuali sebelum tahun 19xx/20xx) -> | */
     _ins_sus_ = prxchange('s/-(?!\s*(?:19|20)\d{2}\b)/|/o', -1, _ins_sus_);
-    /* "1. 2. 3. ..." → | */
+    /* "1. 2. 3. ..." -> | */
     _ins_sus_ = prxchange('s/\d+\./|/o', -1, _ins_sus_);
-    /* PT dan CV → | */
+    /* PT dan CV -> | */
     _ins_sus_ = prxchange('s/\bPT\.?\b/|/oi', -1, _ins_sus_);
     _ins_sus_ = prxchange('s/\bCV\.?\b/|/oi', -1, _ins_sus_);
-    /* Titik dua, titik koma → | */
+    /* Titik dua, titik koma -> | */
     _ins_sus_ = prxchange('s/[:;]/|/o', -1, _ins_sus_);
 
     /* -- 5d. Proses tiap bagian --------------------------------------------- */

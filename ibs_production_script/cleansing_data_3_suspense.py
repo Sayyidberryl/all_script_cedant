@@ -4,6 +4,10 @@
 ================================================================================
 """
 
+import sys
+sys.modules['numexpr'] = None
+sys.modules['bottleneck'] = None
+
 import os
 import re
 import pandas as pd
@@ -12,7 +16,7 @@ from openpyxl import load_workbook
 # ==============================================================================
 # 0. KONFIGURASI
 # ==============================================================================
-_BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # folder IBS/
+_BASE_DIR   = os.path.dirname(os.path.abspath(__file__))  # folder ibs_production_script/
 _RAW_DIR    = os.path.join(_BASE_DIR, "data_raw")
 _CLEAN_DIR  = os.path.join(_BASE_DIR, "data_cleaned")
 
@@ -311,7 +315,10 @@ def process_desc3(value):
 # 4. LOAD & FILTER DATA
 # ==============================================================================
 def load_source(file_path: str, sheet_name: str, header_row: int) -> pd.DataFrame:
-    return pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
+    try:
+        return pd.read_excel(file_path, sheet_name=sheet_name, header=header_row, engine="calamine")
+    except Exception:
+        return pd.read_excel(file_path, sheet_name=sheet_name, header=header_row)
 
 def filter_cedant(df_raw: pd.DataFrame, keyword: str) -> pd.DataFrame:
     cedant_cols = [c for c in df_raw.columns if "CEDANT" in str(c).upper()]

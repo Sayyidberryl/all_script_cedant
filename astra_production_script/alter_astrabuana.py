@@ -36,8 +36,6 @@ OSBAL_DATE_COL   = "FAC_COM_DATE"  # OSBAL  : tanggal awal pertanggungan
 # Reference-row exclusion markers (ATURAN 2)
 _EXCLUDED_REF_MARKERS = ["HUTANG PIUTANG", "DATA SUSPENSE"]
 
-# LINESLIP treatment markers
-_LINESLIP_MARKERS = ("LINESLIP", "LINE SLIP")
 
 # CLSDT general terms yang harus dianggap kosong (fallback ke FAC)
 _GENERAL_CLSDT_MARKERS = {"TBA", "VARIOUS", "P"}
@@ -190,20 +188,6 @@ def _tokens_intersect(tokens_a: frozenset, tokens_b: frozenset) -> bool:
     return False
 
 
-def _is_lineslip_row(sus_row: dict, insured_cols: list) -> bool:
-    """True jika salah satu kolom insured suspend mengandung 'LINESLIP' atau 'LINE SLIP'.
-
-    Kolom yang dicek: insured_cols (clean insured N) + insured_ori.
-    Treatment: RECEIPT DATE + 1 bulan digunakan sebagai tanggal efektif untuk
-    perbandingan dengan FAC_COM_DATE (OSBAL) — karena pembayaran LINESLIP selalu
-    datang satu bulan setelah FAC_COM_DATE.
-    """
-    check_cols = list(insured_cols) + ["insured_ori", "INSURED_ORI", "INSURED"]
-    for col in check_cols:
-        val = _normalize(sus_row.get(col, ""))
-        if val and any(m in val for m in _LINESLIP_MARKERS):
-            return True
-    return False
 
 
 def _get_clean_cols(columns: list, prefix) -> list:
@@ -714,16 +698,11 @@ def _narrow_by_periode(
     matched:     list,
     rows:        list,
 ) -> list:
-    """Preferential periode narrowing: filter OSBAL candidates where RECEIPT DATE < FAC_COM_DATE.
-
-    NON-LINESLIP: RECEIPT DATE >= FAC_COM_DATE.
-    LINESLIP    : FAC_COM_DATE harus TEPAT = RECEIPT DATE - 1 bulan (exact month+year).
-    """
+    """Preferential periode narrowing: filter OSBAL candidates where RECEIPT DATE < FAC_COM_DATE."""
     if len(matched) <= 1:
         return matched
 
     sus_date_normal = suspend_row.get("_sus_date_parsed", "__MISSING__")
-    sus_date_ls     = suspend_row.get("_sus_date_lineslip", None)
 
     if sus_date_normal == "__MISSING__":
         sus_date_raw = suspend_row.get(SUSPEND_DATE_COL, "")
@@ -731,14 +710,11 @@ def _narrow_by_periode(
             return matched
         try:
             sus_date_normal = pd.to_datetime(sus_date_raw, errors="raise")
-            sus_date_ls     = sus_date_normal - pd.DateOffset(months=1)
         except Exception:
             return matched
 
     if sus_date_normal is None:
         return matched
-
-    sus_is_ls = suspend_row.get("_is_lineslip", False)
 
     valid = []
     for i in matched:
@@ -759,13 +735,8 @@ def _narrow_by_periode(
             continue
 
         try:
-            is_ls = sus_is_ls or rows[i].get("_is_lineslip", False)
-            if is_ls and sus_date_ls is not None:
-                if com_date.year == sus_date_ls.year and com_date.month == sus_date_ls.month:
-                    valid.append(i)
-            else:
-                if sus_date_normal >= com_date:
-                    valid.append(i)
+            if sus_date_normal >= com_date:
+                valid.append(i)
         except Exception:
             valid.append(i)
 
@@ -1354,28 +1325,6 @@ def run() -> None:
     polis_facul = _prepend_if_exists("CLSDT_POLICY_NO", polis_facul, facul_cols)
     slip_facul  = _prepend_if_exists("CLSDT_SLIP_NO",   slip_facul,  facul_cols)
 
-    # Pre-parse LINESLIP flags untuk OSBAL
-    print("  Pre-parsing OSBAL LINESLIP flags ...", flush=True)
-    osbal_ls_cols = polis_osbal + slip_osbal + insured_osbal + ["FAC_POLICY_NO", "FAC_SLIP", "FAC_INSURED"]
-    for _row in osbal_rows:
-        _row["_is_lineslip"] = _is_lineslip_row(_row, osbal_ls_cols)
-
-    # Pre-parse LINESLIP flags Suspend
-    print("  Pre-parsing Suspend LINESLIP flags ...", flush=True)
-    lineslip_count = 0
-    for _row in suspend_rows:
-        _row["_is_lineslip"] = _is_lineslip_row(_row, list(insured_sus) + [SUS_INSURED_ORI_COL])
-        if _row["_is_lineslip"]:
-            lineslip_count += 1
-        _parsed = _row.get("_sus_date_parsed")
-        if _parsed is not None:
-            try:
-                _row["_sus_date_lineslip"] = _parsed - pd.DateOffset(months=1)
-            except Exception:
-                _row["_sus_date_lineslip"] = None
-        else:
-            _row["_sus_date_lineslip"] = None
-    print(f"  -> {lineslip_count:,} baris Suspend LINESLIP terdeteksi", flush=True)
 
     # [3] Build lookup indexes
     print("\n[3/5] Building lookup indexes ...", flush=True)
@@ -1507,16 +1456,13 @@ def run() -> None:
                 and scenario != "Beda Currency"):
 
             all_beda = True
-            sus_is_ls = sus.get("_is_lineslip", False)
             sus_date_normal = sus.get("_sus_date_parsed")
-            sus_date_ls = sus.get("_sus_date_lineslip")
 
             for r in osbal_ref:
                 if not r:
                     all_beda = False
                     break
 
-                is_ls = sus_is_ls or r.get("_is_lineslip", False)
                 com_date = r.get("_com_date_parsed", "__MISSING__")
                 if com_date == "__MISSING__":
                     com_raw = r.get(OSBAL_DATE_COL, "")
@@ -1534,14 +1480,9 @@ def run() -> None:
                     break
 
                 try:
-                    if is_ls and sus_date_ls is not None:
-                        if com_date.year == sus_date_ls.year and com_date.month == sus_date_ls.month:
-                            all_beda = False
-                            break
-                    elif not is_ls and sus_date_normal is not None:
-                        if sus_date_normal >= com_date:
-                            all_beda = False
-                            break
+                    if sus_date_normal is not None and sus_date_normal >= com_date:
+                        all_beda = False
+                        break
                 except Exception:
                     all_beda = False
                     break

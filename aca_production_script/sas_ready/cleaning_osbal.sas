@@ -6,9 +6,9 @@
    - Load data/osbal.xlsx
    - Filter cedant = "PT. ASURANSI CENTRAL ASIA" ATAU "PT. ASURANSI CENTRAL ASIA SYARIAH"
    - Kolom CLSDT (opsional): CLSDT_POLICY_NO, CLSDT_SLIP_NO, CLSDT_SERTF_NO
-   - Logika prioritas CLSDT: jika CLSDT valid → gunakan CLSDT, else fallback ke FAC
+   - Logika prioritas CLSDT: jika CLSDT valid -> gunakan CLSDT, else fallback ke FAC
    - Clean polis, slip, insured (maks 5 kolom masing-masing)
-   - Clean sertif dari kolom CLSDT_SERTF_NO (1-6 digit numerik → zero-pad 6 digit)
+   - Clean sertif dari kolom CLSDT_SERTF_NO (1-6 digit numerik -> zero-pad 6 digit)
    - Output Excel: data/osbal_clean_aca.xlsx
    - Export ke PostgreSQL (tabel SUSPENSE_DATA_OSBAL_CLEAN)
 
@@ -19,17 +19,21 @@
    4. clean_polis OSBAL menggunakan validasi lebih ketat (>= 10 digit berturutan)
    ============================================================================= */
 
-options mprint mlogic symbolgen;
+options validvarname=any validmemname=extend mprint symbolgen;
 
 /* ── 0. Path setup ─────────────────────────────────────────────────────────── */
-%let BASE_DIR   = %str(C:\Users\berryl\Desktop\starcore\indore\production_script);
+%if not %symexist(BASE_DIR) %then %do;
+    %let BASE_DIR = %str(c:\Users\berryl\Desktop\starcore\indore\all_script_cedant\aca_production_script);
+%end;
 %let DATA_DIR   = %str(&BASE_DIR.\data);
 %let INPUT_FILE = %str(&DATA_DIR.\osbal.xlsx);
 %let OUT_FILE   = %str(&DATA_DIR.\osbal_clean_aca.xlsx);
 %let MACRO_INC  = %str(&BASE_DIR.\sas_ready\macros_cleaning.sas);
 
 /* ── 1. Include shared macros ──────────────────────────────────────────────── */
-%include "&MACRO_INC.";
+%if %sysfunc(fileexist("&MACRO_INC.")) %then %do;
+    %include "&MACRO_INC.";
+%end;
 
 /* ── 2. Konstanta bisnis ──────────────────────────────────────────────────── */
 %let CEDANT_COL  = CCOS_COMP_NAME;
@@ -122,9 +126,9 @@ run;
    Setara dengan: _clsdt_result_is_valid(tokens) di Python
 
    Logika:
-   - Mengandung >= 10 digit berturutan → polis ACA / slip panjang → VALID
-   - Mengandung >= 7 digit berturutan DAN bukan TBA → slip pendek → VALID
-   - Lainnya → TIDAK VALID (gunakan fallback FAC)
+   - Mengandung >= 10 digit berturutan -> polis ACA / slip panjang -> VALID
+   - Mengandung >= 7 digit berturutan DAN bukan TBA -> slip pendek -> VALID
+   - Lainnya -> TIDAK VALID (gunakan fallback FAC)
    ============================================================================= */
 %macro is_clsdt_valid(val, result_var);
     &result_var = 0;
@@ -137,10 +141,11 @@ run;
 
 
 /* =============================================================================
-   STEP 6: Cleaning — polis, slip, insured, sertif (dengan logika CLSDT)
+   STEP 6: Cleaning -- polis, slip, insured, sertif (dengan logika CLSDT)
    ============================================================================= */
 %put [3/5] Cleaning (dengan prioritas CLSDT) ...;
 
+%macro run_osbal_clean_step();
 data work.osbal_cleaned;
     set work.osbal_renamed;
 
@@ -150,23 +155,12 @@ data work.osbal_cleaned;
            clean_sertif_1  - clean_sertif_5  $10;
 
     /* -- 6a. Clean POLIS dengan prioritas CLSDT ----------------------------- */
-    /* Langkah 1: Clean CLSDT_POLICY_NO */
     %if &HAS_CLSDT_POLIS. %then %do;
-        %apply_clean_polis(&CLSDT_POLIS.);
+        %apply_clean_polis(&CLSDT_POLIS., pfx=_cp_clsdt, tag=clsdt_p);
+        %apply_clean_polis(polis_ori, pfx=clean_polis, tag=fac_p);
+
         _clsdt_polis_valid_ = 0;
-        %is_clsdt_valid(clean_polis_1, _clsdt_polis_valid_);
-
-        /* Jika CLSDT valid → simpan, lalu skip FAC */
-        array _cp_clsdt{5} $500 _cp_clsdt_1 - _cp_clsdt_5;
-        do _i_ = 1 to 5; _cp_clsdt{_i_} = clean_polis_1; end;
-        _cp_clsdt_1 = clean_polis_1; _cp_clsdt_2 = clean_polis_2;
-        _cp_clsdt_3 = clean_polis_3; _cp_clsdt_4 = clean_polis_4;
-        _cp_clsdt_5 = clean_polis_5;
-
-        /* Langkah 2: Clean FAC polis */
-        %apply_clean_polis(polis_ori);
-
-        /* Langkah 3: Prioritas - gunakan CLSDT jika valid */
+        %is_clsdt_valid_array(_cp_clsdt, _clsdt_polis_valid_);
         if _clsdt_polis_valid_ then do;
             clean_polis_1 = _cp_clsdt_1; clean_polis_2 = _cp_clsdt_2;
             clean_polis_3 = _cp_clsdt_3; clean_polis_4 = _cp_clsdt_4;
@@ -175,22 +169,16 @@ data work.osbal_cleaned;
         drop _cp_clsdt_1 - _cp_clsdt_5 _clsdt_polis_valid_;
     %end;
     %else %do;
-        %apply_clean_polis(polis_ori);
+        %apply_clean_polis(polis_ori, pfx=clean_polis, tag=fac_p);
     %end;
 
     /* -- 6b. Clean SLIP dengan prioritas CLSDT ------------------------------ */
     %if &HAS_CLSDT_SLIP. %then %do;
-        %apply_clean_slip(&CLSDT_SLIP.);
+        %apply_clean_slip(&CLSDT_SLIP., pfx=_csl_clsdt, tag=clsdt_s);
+        %apply_clean_slip(slip_ori, pfx=clean_slip, tag=fac_s);
+
         _clsdt_slip_valid_ = 0;
-        %is_clsdt_valid(clean_slip_1, _clsdt_slip_valid_);
-
-        array _csl_clsdt{5} $500 _csl_clsdt_1 - _csl_clsdt_5;
-        _csl_clsdt_1 = clean_slip_1; _csl_clsdt_2 = clean_slip_2;
-        _csl_clsdt_3 = clean_slip_3; _csl_clsdt_4 = clean_slip_4;
-        _csl_clsdt_5 = clean_slip_5;
-
-        %apply_clean_slip(slip_ori);
-
+        %is_clsdt_valid_array(_csl_clsdt, _clsdt_slip_valid_);
         if _clsdt_slip_valid_ then do;
             clean_slip_1 = _csl_clsdt_1; clean_slip_2 = _csl_clsdt_2;
             clean_slip_3 = _csl_clsdt_3; clean_slip_4 = _csl_clsdt_4;
@@ -199,33 +187,20 @@ data work.osbal_cleaned;
         drop _csl_clsdt_1 - _csl_clsdt_5 _clsdt_slip_valid_;
     %end;
     %else %do;
-        %apply_clean_slip(slip_ori);
+        %apply_clean_slip(slip_ori, pfx=clean_slip, tag=fac_s);
     %end;
 
     /* -- 6c. Clean INSURED (selalu dari FAC, CLSDT tidak berpengaruh) ------- */
     %apply_clean_insured(insured_ori);
 
-    /* -- 6d. Clean SERTIFIKAT dari CLSDT_SERTF_NO --------------------------- */
-    /* Setara dengan: clean_sertif(val) di Python
-       Aturan: 1-6 digit numerik → zero-pad ke 6 digit; lainnya → kosong       */
+    /* -- 6d. Clean SERTIFIKAT (equiv Python extract_cert_from_polis_osbal + clean_sertif) -- */
     %if &HAS_CLSDT_SERTF. %then %do;
-        _sertf_raw_ = strip(&CLSDT_SERTF.);
-        /* Handle nilai float yang ujungnya '.0' (dari Excel) */
-        if prxmatch('/\.0$/', _sertf_raw_) then
-            _sertf_raw_ = substr(_sertf_raw_, 1, lengthn(_sertf_raw_) - 2);
-        clean_sertif_1 = '';
-        /* Skip sentinel '#' dan nilai kosong */
-        if not missing(_sertf_raw_) and _sertf_raw_ notin ('', '#') then do;
-            if prxmatch('/^\d{1,6}$/', strip(_sertf_raw_)) then
-                clean_sertif_1 = put(input(strip(_sertf_raw_), 8.), z6.);
-            /* > 6 digit atau non-numerik → bukan sertif → biarkan kosong */
-        end;
-        drop _sertf_raw_;
+        %apply_extract_sertif_osbal(polis_ori, &CLSDT_SERTF.);
     %end;
     %else %do;
-        /* Tidak ada kolom CLSDT_SERTF → sertif dikosongkan */
-        clean_sertif_1 = ''; clean_sertif_2 = ''; clean_sertif_3 = '';
-        clean_sertif_4 = ''; clean_sertif_5 = '';
+        _dummy_sertf_ = '';
+        %apply_extract_sertif_osbal(polis_ori, _dummy_sertf_);
+        drop _dummy_sertf_;
     %end;
 
     /* -- 6e. Clean control chars -------------------------------------------- */
@@ -237,6 +212,8 @@ data work.osbal_cleaned;
     drop _sci_;
 
 run;
+%mend run_osbal_clean_step;
+%run_osbal_clean_step();
 
 %put       Cleaning selesai.;
 
@@ -272,7 +249,7 @@ run;
 
 
 /* =============================================================================
-   STEP 9: Export ke PostgreSQL (opsional — uncomment sesuai environment)
+   STEP 9: Export ke PostgreSQL (opsional -- uncomment sesuai environment)
    ============================================================================= */
 
 /* --- Via ODBC --- */

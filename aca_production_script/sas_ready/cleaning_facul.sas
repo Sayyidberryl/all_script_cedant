@@ -16,17 +16,21 @@
    - Permanent SAS dataset (.sas7bdat) sebagai cache ganti .cache.pkl
    ============================================================================= */
 
-options mprint mlogic symbolgen;
+options validvarname=any validmemname=extend mprint symbolgen;
 
 /* ── 0. Path setup ─────────────────────────────────────────────────────────── */
-%let BASE_DIR   = %str(C:\Users\berryl\Desktop\starcore\indore\production_script);
+%if not %symexist(BASE_DIR) %then %do;
+    %let BASE_DIR = %str(c:\Users\berryl\Desktop\starcore\indore\all_script_cedant\aca_production_script);
+%end;
 %let DATA_DIR   = %str(&BASE_DIR.\data);
 %let INPUT_FILE = %str(&DATA_DIR.\facul.xlsx);
 %let OUT_FILE   = %str(&DATA_DIR.\facul_clean_aca.xlsx);
 %let MACRO_INC  = %str(&BASE_DIR.\sas_ready\macros_cleaning.sas);
 
 /* ── 1. Include shared macros ──────────────────────────────────────────────── */
-%include "&MACRO_INC.";
+%if %sysfunc(fileexist("&MACRO_INC.")) %then %do;
+    %include "&MACRO_INC.";
+%end;
 
 /* ── 2. Definisi konstanta bisnis ─────────────────────────────────────────── */
 %let CEDANT_COL   = COMP_NAME;
@@ -54,7 +58,7 @@ proc import
     out=work.facul_raw
     dbms=xlsx
     replace;
-    getnames=yes;   /* header=0 → baris pertama sebagai nama kolom */
+    getnames=yes;   /* header=0 -> baris pertama sebagai nama kolom */
     datarow=2;
 run;
 
@@ -67,9 +71,10 @@ run;
    ============================================================================= */
 %put [2/5] Filtering cedant = &CEDANT_VALUE.;
 
+%macro filter_facul_step();
 data work.facul_filtered;
     set work.facul_raw;
-    /* Rename kolom jika perlu (COMP_NAME.1 → COMP_NAME2) */
+    /* Rename kolom jika perlu (COMP_NAME.1 -> COMP_NAME2) */
     %if %varexist(work.facul_raw, COMP_NAME_1) %then %do;
         if missing(COMP_NAME2) then COMP_NAME2 = COMP_NAME_1;
     %end;
@@ -79,6 +84,8 @@ data work.facul_filtered;
     if _cedant_chk_ = "&CEDANT_VALUE." then output;
     drop _cedant_chk_;
 run;
+%mend filter_facul_step;
+%filter_facul_step();
 
 %put       Rows setelah filter: %sysfunc(attrn(%sysfunc(open(work.facul_filtered)), nobs));
 
@@ -109,7 +116,7 @@ run;
 
 
 /* =============================================================================
-   STEP 4: Cleaning — polis, slip, insured, sertif
+   STEP 4: Cleaning -- polis, slip, insured, sertif
    Setara dengan: map(clean_polis), map(clean_slip), map(clean_insured)
 
    Optimasi: DATA step single-pass dengan array, jauh lebih efisien
@@ -156,7 +163,7 @@ run;
    Setara dengan: df = df[new_columns]
 
    Kolom urutan:
-   [kolom asli] → polis_ori, clean_polis_1..5, clean_sertif_1..5,
+   [kolom asli] -> polis_ori, clean_polis_1..5, clean_sertif_1..5,
                   slip_ori,  clean_slip_1..5,
                   insured_ori, clean_insured_1..5
    ============================================================================= */

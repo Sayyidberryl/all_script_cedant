@@ -48,7 +48,7 @@ BORDERO_BULAN_COL   = "BULAN"
 BORDERO_TAHUN_COL   = "TAHUN"
 BORDERO_NET_COL     = "NET"
 NET_MATCH_MODE    = "per_row"
-NET_TOLERANCE_PCT = 0.01
+NET_TOLERANCE_PCT = 0.0  # toleransi 0% (exact match)
 
 _BULAN_MAP = {
     "JANUARI": 1, "FEBRUARI": 2, "MARET": 3, "APRIL": 4,
@@ -116,9 +116,6 @@ OSBAL_DATE_COL   = "FAC_COM_DATE"  # OSBAL   (data 2): tanggal awal pertanggunga
 # BUKAN transaksi riil — harus dikecualikan dari index matching.
 _EXCLUDED_REF_MARKERS = ["HUTANG PIUTANG", "DATA SUSPENSE"]
 
-# LINESLIP treatment markers — jika insured suspend mengandung salah satu ini,
-# RECEIPT DATE + 1 bulan digunakan sebagai tanggal efektif untuk cek periode OSBAL.
-_LINESLIP_MARKERS = ("LINESLIP", "LINE SLIP")
 
 # Prefix sertif per tabel
 SUSPEND_SERTIF_PREFIX = _SUS_SERTIF_PREFIX
@@ -271,20 +268,6 @@ def _tokens_intersect(tokens_a: frozenset, tokens_b: frozenset) -> bool:
     return False
 
 
-def _is_lineslip_row(sus_row: dict, insured_cols: list) -> bool:
-    """True jika salah satu kolom insured suspend mengandung 'LINESLIP' atau 'LINE SLIP'.
-
-    Kolom yang dicek: insured_cols (clean insured N) + insured_ori.
-    Treatment: RECEIPT DATE + 1 bulan digunakan sebagai tanggal efektif untuk
-    perbandingan dengan FAC_COM_DATE (OSBAL) — karena pembayaran LINESLIP selalu
-    datang satu bulan setelah FAC_COM_DATE.
-    """
-    check_cols = list(insured_cols) + ["insured_ori", "INSURED_ORI", "INSURED"]
-    for col in check_cols:
-        val = _normalize(sus_row.get(col, ""))
-        if val and any(m in val for m in _LINESLIP_MARKERS):
-            return True
-    return False
 
 
 def _get_clean_cols(columns: list, prefix: str) -> list:
@@ -765,8 +748,8 @@ def _narrow_by_periode(
     suspend_row:        dict,
     matched:            list,
     rows:               list,
-    effective_sus_date        = None,  # Untuk LINESLIP: target FAC_COM_DATE = RECEIPT DATE - 1 bulan
-    is_lineslip:        bool = False,  # Jika True: exact month comparison (eliminatif)
+    effective_sus_date        = None,
+    **_kwargs,
 ) -> list:
     """Preferential periode narrowing: filter OSBAL candidates where RECEIPT DATE < FAC_COM_DATE.
 
@@ -778,13 +761,6 @@ def _narrow_by_periode(
     - Jika semua kandidat melanggar rule (atau tanggal tidak tersedia),
       list asli dikembalikan tanpa perubahan -- narrowing adalah preferential,
       bukan eliminatif. Deteksi akhir dilakukan di run() dan ditag 'Beda Periode'.
-
-    LINESLIP TREATMENT (is_lineslip=True):
-    - effective_sus_date = RECEIPT DATE - 1 bulan (target FAC_COM_DATE yang diharapkan).
-    - Perbandingan EXACT bulan+tahun: FAC_COM_DATE harus sama bulan & tahun dengan
-      effective_sus_date. Lebih atau kurang sebulan -> kandidat dibuang (eliminatif).
-    - Jika semua kandidat tidak cocok (fallback), kembalikan list asli -- final check
-      di run() akan mendeteksi dan menandai 'Beda Periode'.
 
     OPTIMASI: Menggunakan '_sus_date_parsed' dan '_com_date_parsed' (pre-parsed)
     untuk menghindari pemanggilan pd.to_datetime() berulang di setiap kandidat.
@@ -828,15 +804,9 @@ def _narrow_by_periode(
             continue
 
         try:
-            if is_lineslip:
-                # LINESLIP: FAC_COM_DATE harus TEPAT sama bulan & tahun dengan
-                # (RECEIPT DATE - 1 bulan). Lebih atau kurang -> dibuang.
-                if com_date.year == sus_date.year and com_date.month == sus_date.month:
-                    valid.append(i)
-            else:
-                # Normal: RECEIPT DATE >= FAC_COM_DATE
-                if sus_date >= com_date:
-                    valid.append(i)
+            # Normal: RECEIPT DATE >= FAC_COM_DATE
+            if sus_date >= com_date:
+                valid.append(i)
         except Exception:
             valid.append(i)  # tidak bisa di-parse -> tidak disaring
 
@@ -957,8 +927,8 @@ def _run_polis_slip_pass(
     facode_col:           str  = None,
     gunakan_narrow_aca:   bool = False,
     currency_narrowing:   bool = False,
-    effective_sus_date          = None,  # LINESLIP: target FAC_COM_DATE = RECEIPT DATE - 1 bulan
-    is_lineslip:          bool = False,  # Jika True: exact month comparison di _narrow_by_periode
+    effective_sus_date          = None,
+    **_kwargs,
 ) -> tuple:
     """Run one Polis/Slip matching pass, narrow by complementary field, then
     optionally narrow further by currency (only when currency_narrowing=True,
@@ -1001,8 +971,7 @@ def _run_polis_slip_pass(
             # LINESLIP: exact month comparison; non-LINESLIP: >= comparison.
             if len(matched) > 1:
                 matched = _narrow_by_periode(suspend_row, matched, rows,
-                                             effective_sus_date=effective_sus_date,
-                                             is_lineslip=is_lineslip)
+                                             effective_sus_date=effective_sus_date)
         narrowed, scenario = _narrow(
             suspend_row, matched, rows, label,
             polis_ref_cols, slip_ref_cols, insured_ref_cols,
@@ -1019,8 +988,7 @@ def _run_insured_pass(
     insured_sus_cols:   list,
     insured_ref_cols:   list = None,
     currency_narrowing: bool = False,
-    effective_sus_date        = None,  # LINESLIP: target FAC_COM_DATE = RECEIPT DATE - 1 bulan
-    is_lineslip:        bool = False,  # Jika True: exact month comparison
+    effective_sus_date        = None,
     **_kwargs,
 ) -> tuple:
     """Run one Insured fallback matching pass, with optional currency narrowing
@@ -1045,8 +1013,7 @@ def _run_insured_pass(
             matched = _narrow_by_currency(suspend_row, matched, rows)
             if len(matched) > 1:
                 matched = _narrow_by_periode(suspend_row, matched, rows,
-                                             effective_sus_date=effective_sus_date,
-                                             is_lineslip=is_lineslip)
+                                             effective_sus_date=effective_sus_date)
         return matched, _map_scenario(label)
     return [], "Unmatching"
 
@@ -1480,13 +1447,18 @@ def _narrow_by_amount_net(
             # Match jika ada SATU baris yang NET-nya ≈ AMOUNT ORI
             for e in entries:
                 net = _net_float(e)
-                if net is not None and abs(abs(net) - amount_ori) <= tolerance:
-                    matched_facs.add(fac)
-                    break
+                if net is not None:
+                    diff = abs(abs(net) - amount_ori)
+                    if (tolerance == 0.0 and round(abs(net), 2) == round(amount_ori, 2)) or (tolerance > 0.0 and diff <= tolerance):
+                        matched_facs.add(fac)
+                        break
         elif mode == "sum_all":
             nets = [_net_float(e) for e in entries if _net_float(e) is not None]
-            if nets and abs(abs(sum(nets)) - amount_ori) <= tolerance:
-                matched_facs.add(fac)
+            if nets:
+                total_net = abs(sum(nets))
+                diff = abs(total_net - amount_ori)
+                if (tolerance == 0.0 and round(total_net, 2) == round(amount_ori, 2)) or (tolerance > 0.0 and diff <= tolerance):
+                    matched_facs.add(fac)
         elif mode == "sum_by_curr":
             sus_curr = _normalize(suspend_row.get(SUSPEND_CURR_COL, ""))
             nets = [
@@ -1494,8 +1466,11 @@ def _narrow_by_amount_net(
                 if _net_float(e) is not None
                 and _normalize(e.get("curr", "")) == sus_curr
             ] if sus_curr else [_net_float(e) for e in entries if _net_float(e) is not None]
-            if nets and abs(abs(sum(nets)) - amount_ori) <= tolerance:
-                matched_facs.add(fac)
+            if nets:
+                total_net = abs(sum(nets))
+                diff = abs(total_net - amount_ori)
+                if (tolerance == 0.0 and round(total_net, 2) == round(amount_ori, 2)) or (tolerance > 0.0 and diff <= tolerance):
+                    matched_facs.add(fac)
 
     if len(matched_facs) == 1:
         return matched_facs, True
@@ -1960,24 +1935,6 @@ def run() -> None:
     print(f"  FACUL    slip   : {slip_facul}", flush=True)
     print(f"  FACUL    insured: {insured_facul}", flush=True)
 
-    # Pre-parse LINESLIP flags (harus setelah insured_sus diketahui)
-    print("  Pre-parsing LINESLIP flags ...", flush=True)
-    lineslip_count = 0
-    for _row in suspend_rows:
-        _row["_is_lineslip"] = _is_lineslip_row(_row, list(insured_sus) + [SUS_INSURED_ORI_COL])
-        if _row["_is_lineslip"]:
-            lineslip_count += 1
-            _parsed = _row.get("_sus_date_parsed")
-            if _parsed is not None:
-                try:
-                    _row["_sus_date_lineslip"] = _parsed - pd.DateOffset(months=1)
-                except Exception:
-                    _row["_sus_date_lineslip"] = None
-            else:
-                _row["_sus_date_lineslip"] = None
-        else:
-            _row["_sus_date_lineslip"] = None
-    print(f"  -> {lineslip_count:,} baris LINESLIP terdeteksi", flush=True)
 
     # Tambahkan CLSDT ke OSBAL/FACUL jika ada
     def _prepend_if_exists(col: str, cols_list: list, header: list) -> list:
@@ -2045,14 +2002,7 @@ def run() -> None:
             sus, polis_sus, slip_sus
         )
 
-        # LINESLIP treatment: target FAC_COM_DATE = RECEIPT DATE - 1 bulan
-        # (aturan: RECEIPT DATE = FAC_COM_DATE + 1 bulan TEPAT)
-        _is_ls = sus.get("_is_lineslip", False)
-        effective_date = (
-            sus.get("_sus_date_lineslip")  # = RECEIPT DATE - 1 bulan
-            if _is_ls else
-            sus.get("_sus_date_parsed")    # = RECEIPT DATE asli
-        )
+        effective_date = sus.get("_sus_date_parsed")
 
         kw_sus_row = dict(
             polis_sus_cols=eff_polis,
@@ -2061,7 +2011,6 @@ def run() -> None:
             polis_sus_like_cols=like_polis,
             slip_sus_like_cols=like_slip,
             effective_sus_date=effective_date,
-            is_lineslip=_is_ls,
         )
 
         # Pass A: SUSPEND → OSBAL (Polis + Sertif) — rules baru, lebih spesifik dari Polis+Slip
@@ -2080,8 +2029,7 @@ def run() -> None:
                     m = _narrow_by_currency(sus, m, osbal_rows)
                 if len(m) > 1:
                     m = _narrow_by_periode(sus, m, osbal_rows,
-                                           effective_sus_date=effective_date,
-                                           is_lineslip=_is_ls)
+                                           effective_sus_date=effective_date)
                 source = "OSBAL"; scenario = lbl
                 matched = m; osbal_ref = [osbal_rows[i] for i in m]; osbal_count = len(osbal_ref)
 
@@ -2156,76 +2104,37 @@ def run() -> None:
         # Periode check (ATURAN BEDA PERIODE): setelah source final diketahui
         # Hanya berlaku saat match ada, bukan Beda Currency.
         #
-        # NON-LINESLIP: RECEIPT DATE >= FAC_COM_DATE (bayar setelah periode mulai).
-        # LINESLIP    : FAC_COM_DATE harus TEPAT = RECEIPT DATE - 1 bulan (exact month+year).
-        #               Lebih atau kurang -> 'Beda Periode'.
-        if (source is not None and osbal_ref and osbal_ref[0]
-                and scenario != "Beda Currency"):
-
-            if _is_ls:
-                # LINESLIP: cek setidaknya SATU kandidat memiliki FAC_COM_DATE di bulan yang tepat
-                sus_date = effective_date  # = RECEIPT DATE - 1 bulan
-                if sus_date is not None:
-                    any_match = False
-                    for r in osbal_ref:
-                        if not r:
-                            any_match = True
-                            break
-                        com_date = r.get("_com_date_parsed", "__MISSING__")
-                        if com_date == "__MISSING__":
-                            com_raw = r.get(OSBAL_DATE_COL, "")
-                            if com_raw is None or (isinstance(com_raw, float) and pd.isna(com_raw)):
-                                any_match = True
-                                break
-                            try:
-                                com_date = pd.to_datetime(com_raw, errors="raise")
-                            except Exception:
-                                any_match = True
-                                break
-                        if com_date is None:
-                            any_match = True
-                            break
-                        try:
-                            if com_date.year == sus_date.year and com_date.month == sus_date.month:
-                                any_match = True
-                                break
-                        except Exception:
-                            any_match = True
-                            break
-                    if not any_match:
-                        scenario = "Beda Periode"
-            else:
-                # NON-LINESLIP: semua kandidat harus memiliki FAC_COM_DATE <= RECEIPT DATE
-                sus_date = effective_date  # = RECEIPT DATE asli
-                if sus_date is not None:
-                    all_beda = True
-                    for r in osbal_ref:
-                        if not r:
-                            all_beda = False
-                            break
-                        com_date = r.get("_com_date_parsed", "__MISSING__")
-                        if com_date == "__MISSING__":
-                            com_raw = r.get(OSBAL_DATE_COL, "")
-                            if com_raw is None or (isinstance(com_raw, float) and pd.isna(com_raw)):
-                                all_beda = False
-                                break
-                            try:
-                                com_date = pd.to_datetime(com_raw, errors="raise")
-                            except Exception:
-                                all_beda = False
-                                break
-                        if com_date is None:
+            # NON-LINESLIP: semua kandidat harus memiliki FAC_COM_DATE <= RECEIPT DATE
+            sus_date = effective_date  # = RECEIPT DATE asli
+            if sus_date is not None:
+                all_beda = True
+                for r in osbal_ref:
+                    if not r:
+                        all_beda = False
+                        break
+                    com_date = r.get("_com_date_parsed", "__MISSING__")
+                    if com_date == "__MISSING__":
+                        com_raw = r.get(OSBAL_DATE_COL, "")
+                        if com_raw is None or (isinstance(com_raw, float) and pd.isna(com_raw)):
                             all_beda = False
                             break
                         try:
-                            if sus_date >= com_date:
-                                all_beda = False
-                                break
+                            com_date = pd.to_datetime(com_raw, errors="raise")
                         except Exception:
                             all_beda = False
                             break
-                    if all_beda:
-                        scenario = "Beda Periode"
+                    if com_date is None:
+                        all_beda = False
+                        break
+                    try:
+                        if sus_date >= com_date:
+                            all_beda = False
+                            break
+                    except Exception:
+                        all_beda = False
+                        break
+                if all_beda:
+                    scenario = "Beda Periode"
 
         fac_codes = {_normalize(r.get(OSBAL_FACODE_COL, "")) for r in osbal_ref if r}
         fac_codes.discard("")

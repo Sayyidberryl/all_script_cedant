@@ -38,7 +38,7 @@
    - Python list comprehension     → SAS DATA step dengan array
    ============================================================================= */
 
-options mprint mlogic symbolgen compress=yes;
+options validvarname=any validmemname=extend mprint symbolgen compress=yes;
 
 /* =============================================================================
    SECTION 0: PARAMETER & PATH SETUP
@@ -48,7 +48,9 @@ options mprint mlogic symbolgen compress=yes;
 %let ACCUMULATE_MODE  = KEEP_ROWS;    /* KEEP_ROWS (v1) atau MERGE_ROWS (v2) */
 /* Untuk V2: ganti KEEP_ROWS → MERGE_ROWS */
 
-%let BASE_DIR    = %str(C:\Users\berryl\Desktop\starcore\indore\production_script);
+%if not %symexist(BASE_DIR) %then %do;
+    %let BASE_DIR = %str(c:\Users\berryl\Desktop\starcore\indore\all_script_cedant\aca_production_script);
+%end;
 %let DATA_DIR    = %str(&BASE_DIR.\data);
 %let MACRO_INC   = %str(&BASE_DIR.\sas_ready\macros_cleaning.sas);
 
@@ -215,6 +217,7 @@ run;
 /* Pre-parse tanggal di Suspend + flag LINESLIP */
 data work.suspend_clean;
     set work.suspend_clean;
+    sus_idx = _n_;
     format _sus_date_ date9. _sus_date_ls_ date9.;
     _sus_date_ = input(put("&SUSPEND_DATE_COL."n, $100.), anydtdte10.);
 
@@ -318,7 +321,7 @@ run;
 proc sql noprint;
     /* Polis exact match */
     create table work.pass1_polis as
-    select s._n_ as sus_idx,
+    select s.sus_idx,
            o._row_idx_ as ref_idx,
            'OSBAL' as ref_source,
            'Polis only' as match_label
@@ -332,7 +335,7 @@ proc sql noprint;
 
     /* Slip exact match */
     create table work.pass1_slip as
-    select s._n_ as sus_idx,
+    select s.sus_idx,
            o._row_idx_ as ref_idx,
            'OSBAL' as ref_source,
            'Slip only' as match_label
@@ -348,7 +351,7 @@ quit;
 proc sql noprint;
     /* Polis match Suspend ke SLIPDB */
     create table work.pass3_slipdb as
-    select s._n_ as sus_idx,
+    select s.sus_idx,
            sl._row_idx_ as slipdb_idx,
            upcase(strip(sl.&SLIPDB_FACODE_COL.)) as fac_code,
            'SLIPDB' as ref_source,
@@ -373,7 +376,7 @@ quit;
 /* --- 5c: Pass 5 — Suspend → FACUL → resolve FAC_CODE → OSBAL ───────────── */
 proc sql noprint;
     create table work.pass5_facul as
-    select s._n_ as sus_idx,
+    select s.sus_idx,
            f._row_idx_ as facul_idx,
            upcase(strip(f.&FACUL_FACODE_COL.)) as fac_code,
            'FACUL' as ref_source,
@@ -397,7 +400,7 @@ quit;
 /* --- 5d: Pass 7 — Insured fallback ─────────────────────────────────────── */
 proc sql noprint;
     create table work.pass7_insured as
-    select s._n_ as sus_idx,
+    select s.sus_idx,
            o._row_idx_ as ref_idx,
            'OSBAL' as ref_source,
            'Insured only' as match_label
@@ -412,29 +415,19 @@ quit;
 /* --- 5e: Gabungkan semua pass — prioritas berurutan ────────────────────── */
 /* Setara dengan urutan if not matched → try next pass di Python              */
 
-/* Combine semua hasil match dengan prioritas */
+/* Combine semua hasil match dengan prioritas secara benar (concatenation) */
 data work.all_matches;
     length sus_idx 8 ref_idx 8 ref_source $10 match_label $50 pass_priority 8;
-
-    /* Pass 1 Polis (prioritas 10) */
-    set work.pass1_polis (in=p1p);
+    set work.pass1_polis (in=p1p)
+        work.pass1_slip (in=p1s)
+        work.pass3_resolved (in=p3)
+        work.pass5_resolved (in=p5)
+        work.pass7_insured (in=p7);
     if p1p then pass_priority = 10;
-
-    /* Pass 1 Slip (prioritas 20) */
-    set work.pass1_slip (in=p1s);
-    if p1s then pass_priority = 20;
-
-    /* Pass 3 SLIPDB resolved (prioritas 30) */
-    set work.pass3_resolved (in=p3);
-    if p3 then pass_priority = 30;
-
-    /* Pass 5 FACUL resolved (prioritas 40) */
-    set work.pass5_resolved (in=p5);
-    if p5 then pass_priority = 40;
-
-    /* Pass 7 Insured OSBAL (prioritas 50) */
-    set work.pass7_insured (in=p7);
-    if p7 then pass_priority = 50;
+    else if p1s then pass_priority = 20;
+    else if p3 then pass_priority = 30;
+    else if p5 then pass_priority = 40;
+    else if p7 then pass_priority = 50;
 run;
 
 /* Untuk setiap sus_idx, ambil match dengan prioritas tertinggi (angka terkecil) */
@@ -460,21 +453,23 @@ proc sql noprint;
            upcase(strip(s."&SUSPEND_CURR_COL."n)) as sus_curr
     from work.best_pass_per_sus m
          left join work.osbal_indexed o on m.ref_idx = o._row_idx_
-         left join work.suspend_clean s on m.sus_idx = s._n_;
+         left join work.suspend_clean s on m.sus_idx = s.sus_idx;
+
+    /* Hitung kecocokan currency per sus_idx (ANSI SQL standard) */
+    create table work.curr_counts as
+    select sus_idx,
+           count(*) as n_cand,
+           sum(case when osbal_curr = sus_curr and osbal_curr ne '' then 1 else 0 end) as n_curr_match
+    from work.matched_with_curr
+    group by sus_idx;
 
     /* Narrow ke currency yang cocok jika ada */
     create table work.curr_narrowed as
-    select sus_idx, ref_idx, ref_source, match_label, pass_priority, osbal_curr, sus_curr
-    from (
-        select a.*,
-               count(*) over (partition by sus_idx) as n_cand,
-               sum(case when osbal_curr = sus_curr then 1 else 0 end)
-                   over (partition by sus_idx) as n_curr_match
-        from work.matched_with_curr a
-    )
-    where (n_curr_match > 0 and osbal_curr = sus_curr)
-       or (n_curr_match = 0) /* jika semua beda currency, pertahankan semua */
-    ;
+    select m.sus_idx, m.ref_idx, m.ref_source, m.match_label, m.pass_priority, m.osbal_curr, m.sus_curr
+    from work.matched_with_curr m
+         inner join work.curr_counts c on m.sus_idx = c.sus_idx
+    where (c.n_curr_match > 0 and m.osbal_curr = m.sus_curr)
+       or (c.n_curr_match = 0);
 quit;
 
 
@@ -485,7 +480,7 @@ proc sql noprint;
     select m.*
     from work.curr_narrowed m
          left join work.osbal_indexed o on m.ref_idx = o._row_idx_
-         left join work.suspend_clean s on m.sus_idx = s._n_
+         left join work.suspend_clean s on m.sus_idx = s.sus_idx
     where
         /* Baris tanpa tanggal → tidak disaring */
         (o._com_date_ = . or s._sus_date_ = .)
@@ -496,39 +491,38 @@ proc sql noprint;
          and month(o._com_date_) = month(s._sus_date_ls_))
         or
         /* Normal: RECEIPT DATE >= FAC_COM_DATE */
-        (s._is_lineslip_ = 0 and s._sus_date_ >= o._com_date_)
-    ;
+        (s._is_lineslip_ = 0 and s._sus_date_ >= o._com_date_);
 quit;
 
 
 /* --- 5h: Narrowing oleh insured + slip (konfirmasi lintas-field) ─────────── */
 /* Setara dengan: _narrow() di Python */
 proc sql noprint;
+    create table work.cand_counts as
+    select sus_idx, count(*) as n_cand_final
+    from work.periode_narrowed
+    group by sus_idx;
+
     create table work.narrowed_final as
     select m.*,
-           /* Hitung kandidat per sus_idx */
-           count(*) over (partition by m.sus_idx) as n_cand_final,
-           /* Tentukan SKENARIO berdasarkan konfirmasi lintas-field */
-           case
-               when count(*) over (partition by m.sus_idx) = 1 then m.match_label
-               else m.match_label
-           end as final_scenario length=100
+           c.n_cand_final,
+           m.match_label as final_scenario length=100
     from work.periode_narrowed m
-    ;
+         inner join work.cand_counts c on m.sus_idx = c.sus_idx;
 quit;
 
 
 /* --- 5i: Tambah baris Unmatching untuk sus_idx yang tidak ter-match ──────── */
 proc sql noprint;
     create table work.unmatched_sus as
-    select s._n_ as sus_idx,
+    select s.sus_idx,
            . as ref_idx,
            'NONE' as ref_source,
            'Unmatching' as match_label,
            999 as pass_priority,
            'Unmatching' as final_scenario
     from work.suspend_clean s
-    where s._n_ not in (select sus_idx from work.narrowed_final);
+    where s.sus_idx not in (select distinct sus_idx from work.narrowed_final);
 quit;
 
 data work.all_results;
@@ -550,7 +544,7 @@ proc sql noprint;
                          upcase(strip(o.&OSBAL_CURR_COL.)) then 1 else 0 end) as has_curr_match
     from work.all_results m
          left join work.osbal_indexed o on m.ref_idx = o._row_idx_
-         left join work.suspend_clean s on m.sus_idx = s._n_
+         left join work.suspend_clean s on m.sus_idx = s.sus_idx
     where m.ref_source ne 'NONE'
     group by m.sus_idx;
 quit;
@@ -591,7 +585,7 @@ run;
         bdr_insured= upcase(strip(INSURED));
         /* Periode (BULAN + TAHUN) */
         _bulan_no_ = input(put(upcase(strip(BULAN)), $bulan_fmt.), 8.);
-        _tahun_no_ = input(strip(TAHUN), 8.);
+        _tahun_no_ = input(strip(put(TAHUN, $20.)), 8.);
         if _bulan_no_ > 0 and _tahun_no_ > 0 then
             bdr_period = mdy(_bulan_no_, 1, _tahun_no_);
         else bdr_period = .;
@@ -612,7 +606,7 @@ run;
                s._sus_date_ as sus_date
         from work.all_results m
              left join work.osbal_indexed o on m.ref_idx = o._row_idx_
-             left join work.suspend_clean s on m.sus_idx = s._n_
+             left join work.suspend_clean s on m.sus_idx = s.sus_idx
         where m.ref_source ne 'NONE'
           and m.final_scenario not in ('Beda Currency','Beda Periode','Matching >1 Fac code OC MC')
         group by m.sus_idx, s._sus_date_;
@@ -632,7 +626,7 @@ run;
         from work.fac_counts f
              inner join work.all_results m on f.sus_idx = m.sus_idx
              inner join work.osbal_indexed o on m.ref_idx = o._row_idx_
-             left join work.suspend_clean s on f.sus_idx = s._n_
+             left join work.suspend_clean s on f.sus_idx = s.sus_idx
         where f.n_fac_codes > 1;
 
         /* Bordero match: fac_code cocok dengan polis/slip/cert/insured */
@@ -741,7 +735,7 @@ proc sql noprint;
            o.&OSBAL_CURR_COL. as osbal_curr
     from work.all_results m
          left join work.osbal_indexed o on m.ref_idx = o._row_idx_
-         left join work.suspend_clean s on m.sus_idx = s._n_;
+         left join work.suspend_clean s on m.sus_idx = s.sus_idx;
 quit;
 
 %if &ACCUMULATE_MODE. = MERGE_ROWS %then %do;
@@ -801,7 +795,7 @@ data work.output_final;
         _amt_raw_ = compress(_amt_raw_, '.', 'kd'); /* hapus titik */
         _amt_raw_ = translate(_amt_raw_, '.', ','); /* koma → titik */
     end;
-    AMOUNT_ORI_NUM = input(_amt_raw_, 8.);
+    AMOUNT_ORI_NUM = input(_amt_raw_, ??best32.);
     if missing(AMOUNT_ORI_NUM) then AMOUNT_ORI_NUM = 0;
 
     /* AMOUNT_ORI_MIN1 = AMOUNT_ORI * -1 */
@@ -819,10 +813,10 @@ data work.output_final;
 
     /* Flags */
     _accumulated_     = (n_sus_rows > 1);
-    _is_equal_        = (abs(_amount_neg_ - _bal_due_) <= 0.01 * abs(_amount_neg_));
+    _is_equal_        = (round(_amount_neg_, 0.01) = round(_bal_due_, 0.01));
     _is_new_entry_tot = (AMOUNT_ORI_NUM ne 0 and _bal_due_ = 0);
     _is_gt1_ocmc_     = (final_scenario = 'Matching >1 Fac code OC MC');
-    _is_gt1_fac_      = (CCOS_REF_CODE = 'facode lebih dari 1') and not _is_gt1_ocmc_;
+    _is_gt1_fac_      = (index(strip(CCOS_REF_CODE), ',') > 0 or CCOS_REF_CODE = 'facode lebih dari 1') and not _is_gt1_ocmc_;
     _is_adj_tot_      = _is_equal_;
     _is_adj_seb_      = not _is_equal_ and (_amount_neg_ < _bal_due_);
     _is_new_seb_      = not _is_equal_ and (_amount_neg_ > _bal_due_);
@@ -833,8 +827,8 @@ data work.output_final;
         when (final_scenario = 'Beda Currency')              FLAG_PROD = 'Beda Currency';
         when (final_scenario = 'Beda Periode')               FLAG_PROD = 'Beda Periode';
         when (_is_gt1_ocmc_)                                 FLAG_PROD = 'Matching >1 Fac code OC MC';
-        when (_is_new_entry_tot)                             FLAG_PROD = 'New Entry total';
         when (_is_gt1_fac_)                                  FLAG_PROD = 'Matching >1 fac code';
+        when (_is_new_entry_tot)                             FLAG_PROD = 'New Entry total';
         when (_is_adj_tot_ and not _accumulated_)            FLAG_PROD = 'Adjustment total tanpa akumulasi';
         when (_is_adj_tot_ and _accumulated_)                FLAG_PROD = 'Adjustment total dengan akumulasi';
         when (_is_adj_seb_ and not _accumulated_)            FLAG_PROD = 'Adjustment sebagian tanpa akumulasi';
@@ -848,6 +842,9 @@ data work.output_final;
         final_scenario = 'Unmatching';
         FLAG_PROD = 'Unmatching';
     end;
+
+    /* CCOS_DOC_NO hanya diisi untuk Adjustment total tanpa akumulasi */
+    if FLAG_PROD ne 'Adjustment total tanpa akumulasi' then CCOS_DOC_NO = '';
 
     /* Rename untuk output */
     rename final_scenario = SKENARIO;

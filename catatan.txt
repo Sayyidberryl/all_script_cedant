@@ -1,0 +1,12 @@
+Hasil Matching MAG
+New entry: 4342
+Adjusted: 5322
+
+Dari 14687 data ada 65,80% data yang masuk ke dalam new entry dan adjusted
+
+Catatan:
+- dari 3030 row di new entry sebagian, terdapat 92 row yang selisihnya sangat kecil (<= 1.0, yaitu selisih desimal: <= $1 untuk USD dan <= Rp 1 akibat koma desimal untuk IDR) serta 249 row yang selisihnya <= Rp 100. Begitu juga pada adjustment sebagian, ada 31 row dengan selisih <= 1.0 dan 248 row dengan selisih <= Rp 100. Jika diberikan toleransi selisih kecil (misal pembulatan valas / selisih koma rupiah / materai / fee bank), row-row ini berpotensi masuk ke dalam adjustment total.
+- karakteristik format polis_ori di MAG mencakup nomor polis dan sertifikat atau endorsement yang dipisah tanda minus (contohnya: 02031124000016-001623 di mana 02031124000016 adalah nomor master polis dan 001623 adalah nomor sertifikat; serta 40080324000591-1/1 di mana 1/1 adalah nomor endorsement/closing). Pemisahan sertifikat ini digunakan untuk matching ke rentang (range) sertifikat di OSBAL.
+- pada skenario matching >1 fac code (3344 row), sebanyak 1103 row (98,8% dari Polis only >1 Fac) terkonsentrasi hanya pada 4 master polis bordero bulanan (02031125000018, 02031126000011, 02031124000016, dan 40010924046082). Hal ini terjadi karena di OSBAL tiap bulan bordero diterbitkan FAC code berbeda, sementara di suspend nomor sertifikatnya berada di luar rentang yang sudah tercatat di OSBAL.
+- dari 988 row di beda currency, sebagian besar (956 row / 96,8%) terjadi pada fallback skenario Insured only, di mana nomor polis suspend tidak ditemukan di OSBAL lalu sistem mencocokkan ke FAC lain milik tertanggung yang sama dengan mata uang berbeda di OSBAL. Hanya 32 row yang memang polisnya sudah match sejak awal namun berbeda currency.
+- dari 623 data unmatching, sebanyak 618 data (99,2%) sebenarnya memiliki nomor polis yang lengkap dan valid di data suspend, namun nomor polis tersebut memang tidak tercatat di master data OSBAL maupun FACUL (belum di-entry atau merupakan bisnis non-fakultatif).
