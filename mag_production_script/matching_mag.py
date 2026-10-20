@@ -29,16 +29,18 @@ import pandas as pd
 # =============================================================================
 
 _BASE_DIR  = os.path.dirname(os.path.abspath(__file__))   # folder MAG/
-_CLEAN_DIR = os.path.join(_BASE_DIR, "data_cleaned")       # hasil cleansing
-_RAW_DIR   = os.path.join(_BASE_DIR, "data_raw")           # data mentah
+_DATA_DIR  = os.path.join(_BASE_DIR, "data")
+_CLEAN_DIR = os.path.join(_BASE_DIR, "data_cleaned") if os.path.exists(os.path.join(_BASE_DIR, "data_cleaned")) else _DATA_DIR
+_RAW_DIR   = os.path.join(_BASE_DIR, "data_raw") if os.path.exists(os.path.join(_BASE_DIR, "data_raw")) else _DATA_DIR
 
 
 def _find_file_in(directory: str, basenames: list) -> str:
     """Cari file pertama yang ada dari daftar kandidat nama dalam direktori tertentu."""
     for name in basenames:
-        p = os.path.join(directory, name)
-        if os.path.exists(p):
-            return p
+        for d in [directory, _DATA_DIR, _BASE_DIR]:
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                return p
     return os.path.join(directory, basenames[0])
 
 
@@ -1007,16 +1009,22 @@ def _format_final_scenario(
     if not source or not base_scenario or str(base_scenario).strip().upper() in ("UNMATCHING", "UNMATCHED"):
         return "Unmatching"
 
-    if is_beda_curr:
-        return "Beda Currency"
-    elif is_beda_per:
-        return "Beda Periode"
-
     base = _clean_base_match(base_scenario)
     if not base or base.upper() in ("UNMATCHING", "UNMATCHED"):
         return "Unmatching"
 
-    return base
+    if is_beda_curr:
+        return f"{base} (Beda Currency)"
+    elif is_beda_per:
+        return f"{base} (Beda Periode)"
+    elif is_bordero and num_fac > 1:
+        return f"{base} (> 1 Fac Bordero)"
+    elif is_bordero and num_fac <= 1:
+        return f"{base} (Bordero)"
+    elif not is_bordero and num_fac > 1:
+        return f"{base} (> 1 Fac)"
+    else:
+        return base
 
 
 def _build_output_row(
@@ -1920,8 +1928,7 @@ def run() -> None:
         # Jika is_beda_per  -> scenario = "Beda Periode", osbal_count = 0.
         # Jika not matched_osbal_idx -> scenario = "Unmatching".
         if is_beda_curr or is_beda_per:
-            scenario = "Beda Currency" if is_beda_curr else "Beda Periode"
-            osbal_ref = [osbal_rows[i] for i in list(matched_osbal_idx)] if matched_osbal_idx else [{}]
+            osbal_ref = [osbal_rows[i] for i in matched_list] if matched_list else [{}]
             osbal_count = 0
             resolved = False
         elif not matched_osbal_idx:
@@ -1943,9 +1950,10 @@ def run() -> None:
             "is_bordero": False,
             "is_beda_curr": is_beda_curr,
             "is_beda_per": is_beda_per,
-            "osbal_idx": list(matched_osbal_idx),
+            "osbal_idx": list(matched_osbal_idx) if not (is_beda_curr or is_beda_per) else list(matched_list),
             "osbal_count": osbal_count, "resolved": resolved, "fac_codes": fac_codes,
             "_like_log": [m for _, m in _like_log],
+            "_orig_idx": n,
         })
 
     print(f"  Matching selesai dalam {time.perf_counter()-t4:.1f}s", flush=True)
@@ -1991,21 +1999,11 @@ def run() -> None:
         if (len(r["fac_codes"]) == 1 and r["source"] is not None
                 and not r.get("is_beda_curr", False) and not r.get("is_beda_per", False)):
             fac = next(iter(r["fac_codes"]))
-            # Jika baris match berdasarkan identifier spesifik (Polis / Slip / Amount),
-            # kelompokkan per (FAC, POLIS, SLIP) agar tidak mencampur polis berbeda dalam 1 bordero.
-            # Jika Insured only, kelompokkan per (FAC, "GENERIC").
-            _sc = r.get("base_scenario", "")
-            if any(k in _sc for k in ("Polis", "Slip", "Amount")):
-                _pol = _normalize(r["suspend"].get("clean polis 1", "") or r["suspend"].get("polis_ori", ""))
-                _slp = _normalize(r["suspend"].get("clean slip 1", "") or r["suspend"].get("slip_ori", ""))
-                grp_key = (fac, _pol, _slp) if (_pol or _slp) else (fac, tuple(sorted(r["osbal_idx"])))
-            else:
-                grp_key = (fac, "GENERIC")
-            groups.setdefault(grp_key, []).append(r)
+            groups.setdefault(fac, []).append(r)
         else:
             final.append(r)
 
-    for grp_key, group in groups.items():
+    for fac, group in groups.items():
         if len(group) == 1:
             group[0]["suspend_count"] = 1; final.append(group[0]); continue
         merged_osbal_idx = set()
@@ -2018,6 +2016,9 @@ def run() -> None:
             g["suspend_count"]      = len(group)
             g["_merged_amount_ori"] = merged_sus.get("AMOUNT ORI", 0)
             final.append(g)
+
+    # Urutkan kembali sesuai urutan baris suspend asli (identik dengan standar ASTRA & ACA)
+    final.sort(key=lambda r: r.get("_orig_idx", 0))
 
     print(f"  {len(raw_results):,} suspend rows -> {len(final):,} output rows (row asli dipertahankan)", flush=True)
     total_like = stat_like_substr + stat_like_subset + stat_like_overlap + stat_like_group
@@ -2038,23 +2039,8 @@ def run() -> None:
             fac = next(iter(r["fac_codes"]))
             all_fac_idx = facode_osbal_idx.get(fac, [])
             if len(all_fac_idx) > 0:
-                # Mekanisme 2: Jika scenario match by Polis/Slip/Amount,
-                # ref_osbal sudah difilter spesifik → gunakan sebagai BAL_DUE.
-                # Jika scenario lebih umum (Insured only, Name only, dsb.),
-                # gunakan all_fac_osbal_rows (seluruh FAC) untuk BAL_DUE akurat.
-                _base_sc = r.get("base_scenario", "")
-                _specific_match = any(
-                    kw in _base_sc
-                    for kw in ("Polis", "Slip", "Amount")
-                )
-                if _specific_match and len(ref_osbal) > 0 and ref_osbal[0]:
-                    # BAL_DUE dihitung dari ref_osbal (filtered by polis/slip)
-                    all_fac_osbal_rows = None   # biarkan _aggregate_ccos pakai ref_osbal
-                    osbal_cnt = r["osbal_count"]
-                else:
-                    # BAL_DUE dari seluruh outstanding FAC
-                    all_fac_osbal_rows = [osbal_rows[i] for i in all_fac_idx]
-                    osbal_cnt = len(all_fac_idx)
+                all_fac_osbal_rows = [osbal_rows[i] for i in all_fac_idx]
+                osbal_cnt = len(all_fac_idx)
 
         final_scenario = _format_final_scenario(
             base_scenario=r.get("base_scenario", ""),
