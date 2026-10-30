@@ -1,0 +1,287 @@
+from pathlib import Path
+from collections import defaultdict
+import re
+import unicodedata
+import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
+
+ROOT = Path(__file__).resolve().parent
+TOP_N = 10
+MIN_SCORE = 0.0
+
+# Path referensi & output untuk BRINS
+MATCH_PATHS = [
+    ROOT / 'final_output_v1.xlsx',
+    ROOT / 'final_output_debug.xlsx',
+    ROOT / 'output' / 'final_output_v1.xlsx',
+]
+OSBAL_PATHS = [
+    ROOT / 'data_clean' / 'brins_output_osbal_V2.xlsx',
+    ROOT / 'data_clean' / 'brins_output_osbal.xlsx',
+    ROOT / 'output' / 'brins_output_osbal_V2.xlsx',
+]
+FACUL_PATHS = [
+    ROOT / 'data_clean' / 'brins_output_facul.xlsx',
+    ROOT / 'output' / 'brins_output_facul.xlsx',
+]
+BORDERO_PATHS = [
+    ROOT / 'data_clean' / 'brins_output_bordero.xlsx',
+    ROOT / 'data_raw' / 'brins_output_bordero.xlsx',
+    ROOT / 'data_clean' / 'brins_output_bordero_clean.xlsx',
+]
+RI_SLIP_PATHS = [
+    ROOT / 'data_raw' / '5. Database Rekap RI Slip.xlsx',
+    ROOT / 'data_clean' / '5. Database Rekap RI Slip.xlsx',
+    ROOT / '5. Database Rekap RI Slip.xlsx',
+]
+DEST = ROOT / 'brins_insured_tfidf_audit.xlsx'
+COMMON = {'PT','CV','UD','TBK','PERSERO','LTD','INC','LLC','CO','CORP','CORPORATION','COMPANY'}
+
+
+def txt(value):
+    if value is None or (not isinstance(value, (list, tuple)) and pd.isna(value)):
+        return ''
+    value = str(value).strip()
+    return '' if value.upper() in {'NAN','NONE','NAT'} else value
+
+
+def norm(value):
+    value = unicodedata.normalize('NFKC', txt(value)).upper()
+    value = re.sub(r'[^A-Z0-9]+', ' ', value)
+    return ' '.join(token for token in value.split() if token not in COMMON)
+
+
+def col(df, *names):
+    lookup = {re.sub(r'[^A-Z0-9]+','', str(key).upper()): key for key in df.columns}
+    for name in names:
+        result = lookup.get(re.sub(r'[^A-Z0-9]+','', name.upper()))
+        if result is not None:
+            return result
+    return None
+
+
+def insured_clean_columns(df):
+    """Berbagai template: INSURED_1, INSURED_CLEAN_1, INSURED_CLN_1, clean insured 1."""
+    result = []
+    for column in df.columns:
+        name = re.sub(r'[^A-Z0-9]+', '', str(column).upper())
+        if re.fullmatch(r'(?:INSUREDCLEAN|INSUREDCLN|CLEANINSURED|INSURED)[1-5]', name):
+            result.append(column)
+    return sorted(result, key=lambda c: int(re.search(r'[1-5]$', str(c)).group()))
+
+
+def name_columns(df, source):
+    if source == 'BORDERO':
+        # Bordero cleaned tidak mempunyai kolom clean 1-5: hasilnya ada di INSURED.
+        insured = col(df, 'INSURED')
+        if insured is None:
+            raise ValueError('Bordero cleaned tidak punya kolom INSURED. Kolom: '+str(list(df.columns)))
+        return [insured]
+    clean = insured_clean_columns(df)
+    if clean:
+        return clean
+    raw = col(df, 'FAC_INSURED','INSURED_ORI','INSURED','INSURED NAME','INSURED_NAME')
+    if raw is None:
+        raise ValueError(f'{source}: tidak ditemukan kolom insured (clean maupun raw): {list(df.columns)}')
+    return [raw]
+
+
+def variants(row, columns, source):
+    for column in columns:
+        raw = txt(row[column])
+        if not raw:
+            continue
+        # Hanya Bordero menggunakan delimiter / antar nama yang berbeda.
+        parts = re.split(r'\s*/\s*', raw) if source == 'BORDERO' else [raw]
+        for part in parts:
+            part = part.strip()
+            if norm(part):
+                yield str(column), part, norm(part)
+
+
+def read_required(path, label):
+    if not path.exists():
+        raise FileNotFoundError(f'{label} tidak ditemukan: {path}')
+    return pd.read_excel(path, dtype=object, engine='openpyxl')
+
+
+def read_ri_slip(path):
+    """Detect insured in RI Slip at Excel header rows 1-3."""
+    for header in (0, 1, 2):
+        frame = pd.read_excel(path, header=header, dtype=object, engine='openpyxl')
+        if insured_clean_columns(frame) or col(frame, 'FAC_INSURED', 'INSURED_ORI',
+                                                'INSURED', 'INSURED NAME', 'INSURED_NAME') is not None:
+            if header:
+                print(f'[RI SLIP] Header baris {header + 1}: {path.name}')
+            return frame
+    raise ValueError(f'RI SLIP: tidak ditemukan kolom insured di header baris 1-3: {path}')
+
+
+def locate_file(paths, label, optional=False):
+    for path in paths:
+        if path.exists():
+            return path
+    if optional:
+        return None
+    raise FileNotFoundError(f'{label} tidak ditemukan; cek path: {[str(p) for p in paths]}')
+
+
+def locate_ri():
+    for path in RI_SLIP_PATHS:
+        if path.exists():
+            return path
+    raise FileNotFoundError('RI Slip tidak ditemukan; cek RI_SLIP_PATHS: '+', '.join(str(x) for x in RI_SLIP_PATHS))
+
+
+def references(source_df, source):
+    namecols = name_columns(source_df, source)
+    fc = col(source_df,'CCOS_REF_CODE','FAC_CODE','FAC CODE','FACODE')
+    currency = col(source_df,'CCOS_CURR','FAC_CURRENCY','CURR','CURR ORI')
+    records = {}
+    for _, row in source_df.iterrows():
+        for column,raw,key in variants(row, namecols, source):
+            record = records.setdefault(key,{'source':source,'name':raw,'key':key,'codes':set(),
+                                          'currencies':set(),'count':0,'columns':set()})
+            record['count'] += 1
+            record['columns'].add(column)
+            if fc and txt(row[fc]): record['codes'].add(txt(row[fc]))
+            if currency and txt(row[currency]): record['currencies'].add(txt(row[currency]).upper())
+    return list(records.values())
+
+
+def chosen_rows(result):
+    scenario_col = col(result,'SKENARIO')
+    flag_col = col(result,'FLAG_PROD')
+    if scenario_col is None and flag_col is None:
+        raise ValueError('Output matching tidak punya SKENARIO maupun FLAG_PROD')
+    scenarios = result[scenario_col].fillna('').astype(str) if scenario_col else pd.Series('',index=result.index)
+    flags = result[flag_col].fillna('').astype(str) if flag_col else pd.Series('',index=result.index)
+    # Target audit: skenario Insured serta status Unmatching.
+    mask = scenarios.str.contains('insured',case=False,regex=False) | scenarios.str.contains('unmatching|unmatched',case=False,regex=True) | flags.str.contains('unmatching|unmatched',case=False,regex=True)
+    return result.loc[mask].copy(),scenario_col,flag_col
+
+
+def main():
+    match_path = locate_file(MATCH_PATHS, 'Matching BRINS')
+    osbal_path = locate_file(OSBAL_PATHS, 'OSBAL')
+    facul_path = locate_file(FACUL_PATHS, 'FACUL')
+    bordero_path = locate_file(BORDERO_PATHS, 'BORDERO', optional=True)
+
+    print(f'[INPUT] Matching : {match_path}')
+    print(f'[INPUT] OSBAL    : {osbal_path}')
+    print(f'[INPUT] FACUL    : {facul_path}')
+
+    result = read_required(match_path, 'Matching BRINS')
+    data = [
+        ('OSBAL', read_required(osbal_path, 'OSBAL')),
+        ('RI SLIP', read_ri_slip(locate_ri())),
+        ('FACUL', read_required(facul_path, 'FACUL')),
+    ]
+    if bordero_path:
+        print(f'[INPUT] BORDERO  : {bordero_path}')
+        data.append(('BORDERO', read_required(bordero_path, 'Bordero cleaned')))
+    else:
+        print('[INPUT] BORDERO  : Tidak ada (dilewati)')
+
+    selected,scenario_col,flag_col = chosen_rows(result)
+    qcols = name_columns(result, 'SUSPEND')
+    ori_col = col(result,'INSURED_ORI','FAC_INSURED','INSURED')
+    refs = []
+    stats = []
+    for source,frame in data:
+        group = references(frame,source)
+        stats.append({'METRIK':'Referensi unik '+source,'NILAI':len(group)})
+        refs.extend(group)
+    if not refs:
+        raise ValueError('Seluruh sumber referensi tidak memiliki nama insured valid')
+    vectorizer = TfidfVectorizer(analyzer='char_wb',ngram_range=(2,5),min_df=1,sublinear_tf=True)
+    matrix=vectorizer.fit_transform([r['key'] for r in refs])
+    neighbors=NearestNeighbors(metric='cosine',algorithm='brute',n_neighbors=min(TOP_N,len(refs)))
+    neighbors.fit(matrix)
+    queries={}
+    details=[]
+    fac_result = col(result,'CCOS_REF_CODE','FAC_CODE','FAC CODE')
+    curr_result = col(result,'CURR ORI','CURR')
+    receipt = col(result,'RECEIPT NO','RECEIPT_NO')
+    for idx,row in selected.iterrows():
+        row_variants=list(variants(row,qcols,'SUSPEND'))
+        if not row_variants and ori_col:
+            row_variants=list(variants(row,[ori_col],'SUSPEND'))
+        for column,raw,key in row_variants:
+            q=queries.setdefault(key,{'name':raw,'key':key,'receipts':set(),
+                                      'scenarios':set(),'flags':set(),'columns':set()})
+            q['receipts'].add(idx);q['columns'].add(column)
+            q['scenarios'].add(txt(row[scenario_col]) if scenario_col else '')
+            q['flags'].add(txt(row[flag_col]) if flag_col else '')
+            details.append({'EXCEL_ROW':idx+2,'INSURED_VARIANT':raw,'INSURED_COLUMN':column,
+                            'INSURED_KEY':key,'INSURED_ORI':txt(row[ori_col]) if ori_col else '',
+                            'SKENARIO':txt(row[scenario_col]) if scenario_col else '',
+                            'FLAG_PROD':txt(row[flag_col]) if flag_col else '',
+                            'FAC_CODE_HASIL':txt(row[fac_result]) if fac_result else '',
+                            'CURR_ORI':txt(row[curr_result]) if curr_result else '',
+                            'RECEIPT_NO':txt(row[receipt]) if receipt else ''})
+    candidates=[]
+    if queries:
+        all_queries=list(queries.values())
+        distances,indices=neighbors.kneighbors(vectorizer.transform([q['key'] for q in all_queries]))
+        for q,ds,ids in zip(all_queries,distances,indices):
+            qt=set(q['key'].split())
+            for rank,(distance,ri) in enumerate(zip(ds,ids),1):
+                ref=refs[int(ri)]
+                common=qt & set(ref['key'].split())
+                score=round(max(0.0,1.0-float(distance))*100,2)
+                if score<MIN_SCORE:continue
+                rt=set(ref['key'].split())
+                risks=[]
+                if (qt^rt)&{'SYARIAH','SHARIA'}:risks.append('SYARIAH_DIFFERENCE')
+                if (qt^rt)&{'GROUP','GRUP'}:risks.append('GROUP_DIFFERENCE')
+                if (qt^rt)&{'PALM','SAWIT'}:risks.append('BUSINESS_WORD_DIFFERENCE')
+                if len(common-{'INDONESIA','GROUP','GRUP'})<=1:risks.append('WEAK_SHARED_TOKENS')
+                if len(ref['codes'])>1:risks.append('REFERENCE_MULTI_FAC_CODE')
+                candidates.append({'INSURED_SUSPEND':q['name'],'NORMALIZED_SUSPEND':q['key'],
+                    'CLEAN_COLUMNS':', '.join(sorted(q['columns'])), 'JUMLAH_RECEIPT':len(q['receipts']),
+                    'SKENARIO_ASAL':' | '.join(sorted(x for x in q['scenarios'] if x)),
+                    'FLAG_ASAL':' | '.join(sorted(x for x in q['flags'] if x)),
+                    'RANK':rank,'TFIDF_SCORE':score,'KANDIDAT_INSURED':ref['name'],
+                    'KANDIDAT_NORMALIZED':ref['key'],'SUMBER':ref['source'],
+                    'SHARED_TOKENS':', '.join(sorted(common)),'RISK_FLAGS':' | '.join(risks),
+                    'FAC_CODE_REFERENSI':', '.join(sorted(ref['codes'])),
+                    'JUMLAH_FAC_CODE_REFERENSI':len(ref['codes']),
+                    'CURRENCY_REFERENSI':', '.join(sorted(ref['currencies'])),
+                    'JUMLAH_REFERENSI':ref['count'],'KOLOM_REFERENSI':', '.join(sorted(ref['columns'])),
+                    'STATUS_VALIDASI':'PENDING','CATATAN_REVIEW':'','KEPUTUSAN_FAC_CODE':''})
+    summary=[{'METRIK':'Perusahaan','NILAI':'BRINS'},
+             {'METRIK':'Total baris matching','NILAI':len(result)},
+             {'METRIK':'Baris terpilih untuk audit','NILAI':len(selected)},
+             {'METRIK':'Nama Insured clean unik yang diaudit','NILAI':len(queries)},
+             *stats,
+             {'METRIK':'Total nama referensi unik seluruh sumber','NILAI':len(refs)},
+             {'METRIK':'Jumlah kandidat TF-IDF','NILAI':len(candidates)},
+             {'METRIK':'Top N per nama Insured clean','NILAI':TOP_N}]
+    guide=[{'PANDUAN':'Sumber kandidat: OSBAL, RI SLIP, FACUL (dan BORDERO jika tersedia).'},
+           {'PANDUAN':'Nama Bordero cleaned dibaca dari INSURED, dipecah berdasarkan delimiter /.'},
+           {'PANDUAN':'Nama Suspend/FACUL menggunakan seluruh insured clean 1–5 (jika ada); raw hanya fallback.'},
+           {'PANDUAN':'Setiap varian nama insured Suspend mendapat maksimum 10 kandidat gabungan seluruh sumber.'},
+           {'PANDUAN':'TFIDF_SCORE hanya ranking kemiripan; tidak boleh otomatis mengubah FAC_CODE.'},
+           {'PANDUAN':'Audit hanya membaca workbook input; tidak mengubah matching maupun FAC_CODE.'}]
+    DEST.parent.mkdir(parents=True,exist_ok=True)
+    with pd.ExcelWriter(DEST,engine='openpyxl') as writer:
+        for sheet,rows in [('AUDIT_SUMMARY',summary),('TFIDF_CANDIDATES',candidates),
+                           ('RECEIPT_DETAILS',details),('CARA_PAKAI',guide)]:
+            frame=pd.DataFrame(rows)
+            if frame.empty:frame=pd.DataFrame({'INFO':['Tidak ada data yang memenuhi filter']})
+            frame.to_excel(writer,sheet_name=sheet,index=False)
+            ws=writer.sheets[sheet]
+            ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+            from openpyxl.styles import Font,PatternFill
+            for cell in ws[1]:
+                cell.font=Font(color='FFFFFF',bold=True)
+                cell.fill=PatternFill('solid',fgColor='1F4E78')
+            for column in ws.columns:
+                ws.column_dimensions[column[0].column_letter].width=min(52,max(14,max(len(str(cell.value or '')) for cell in list(column)[:150])+2))
+    print(f'OK: {DEST} | audited={len(selected)} | queries={len(queries)} | candidates={len(candidates)}')
+
+if __name__=='__main__':
+    main()
