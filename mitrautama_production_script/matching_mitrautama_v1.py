@@ -1,24 +1,24 @@
+import difflib
+import functools
 import os
 import re
 import sys
 import time
-import functools
 
-sys.modules['numexpr'] = None
-sys.modules['bottleneck'] = None
+sys.modules["numexpr"] = None
+sys.modules["bottleneck"] = None
 
 import numpy as np
 import pandas as pd
-import difflib
 
-
-# KONFIGURASI (CEDANT: MITRAUTAMA)
+# Konfigurasi direktori dan file
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _CLEAN_DIR = os.path.join(_BASE_DIR, "data_clean")
 _RAW_DIR = os.path.join(_BASE_DIR, "data_raw")
 
 
 def _find_file_in(directory: str, basenames: list) -> str:
+    # Mencari file pertama yang tersedia dari daftar nama yang diberikan
     for name in basenames:
         p = os.path.join(directory, name)
         if os.path.exists(p):
@@ -29,20 +29,19 @@ def _find_file_in(directory: str, basenames: list) -> str:
 SUSPEND_FILE = _find_file_in(_CLEAN_DIR, ["mitrautama_output_suspend.xlsx"])
 OSBAL_FILE = _find_file_in(_CLEAN_DIR, ["mitrautama_output_osbal.xlsx"])
 FACUL_FILE = _find_file_in(_CLEAN_DIR, ["mitrautama_output_facul.xlsx"])
-SLIPDB_FILE = _find_file_in(_RAW_DIR, [
-    "5. Database Rekap RI Slip.xlsx",
-    "5.Database Rekap RI Slip.xlsx",
-    "Database Rekap RI Slip.xlsx",
-])
+SLIPDB_FILE = _find_file_in(
+    _RAW_DIR,
+    ["5. Database Rekap RI Slip.xlsx", "5.Database Rekap RI Slip.xlsx", "Database Rekap RI Slip.xlsx"],
+)
 SLIPDB_HEADER_ROW = 1
 OUTPUT_FILE = os.path.join(_BASE_DIR, "matching_mitrautama_v1.xlsx")
 
-# Kolom Fac Code
+# Definisi nama kolom referensi dan kunci fac code
 OSBAL_FACODE_COL = "CCOS_REF_CODE"
 FACUL_FACODE_COL = "FAC_CODE"
 SLIPDB_FACODE_COL = "FAC. CODE"
 
-# Kolom Suspend (Data 3)
+# Definisi kolom data Suspend (Data 3)
 SUSPEND_CURR_COL = "CURR ORI"
 SUSPEND_DATE_COL = "RECEIPT DATE"
 SUSPEND_SLIP_PREFIX = "SLIP_NO_CLEAN"
@@ -51,7 +50,7 @@ SUSPEND_POLIS_PREFIX = "POLIS_CLEAN"
 SUSPEND_SERTIF_PREFIX = "CERTIFICATE_"
 SUSPEND_GROUP_COL = "DESC 2"
 
-# Kolom Osbal (Data 2)
+# Definisi kolom data Osbal (Data 2)
 OSBAL_CURR_COL = "CCOS_CURR"
 OSBAL_DATE_COL = "FAC_COM_DATE"
 OSBAL_SLIP_COLS = ["SLIP_CLEAN_1", "SLIP_CLEAN_2", "SLIP_CLEAN_3", "SLIP_CLEAN_4", "CLSDT_SLIP_NO"]
@@ -61,7 +60,7 @@ OSBAL_INSURED_COLS = [
     "FAC_INSURED_CLN_4", "FAC_INSURED_CLN_5"
 ]
 
-# Kolom Facul (Data 1)
+# Definisi kolom data Facul (Data 1)
 FACUL_SLIP_COLS = ["FAC_SLIP_CLEAN_1", "FAC_SLIP_CLEAN_2", "FAC_SLIP_CLEAN_3", "FAC_SLIP_CLEAN_4"]
 FACUL_POLIS_COLS = ["FAC_POLICY_NO_CLEAN_1", "FAC_POLICY_NO_CLEAN_2"]
 FACUL_INSURED_COLS = [
@@ -69,7 +68,7 @@ FACUL_INSURED_COLS = [
     "FAC_INSURED_CLN_4", "FAC_INSURED_CLN_5"
 ]
 
-# Kolom Slip DB (Data 5)
+# Definisi kolom data Slip DB (Data 5)
 SLIPDB_RAW_SLIP = "SLIP"
 SLIPDB_RAW_POLIS = "POLICY NO"
 SLIPDB_RAW_INSURED = "INSURED"
@@ -77,30 +76,29 @@ SLIPDB_SLIP_COLS = ["_SLIP_KEY"]
 SLIPDB_POLIS_COLS = ["_POLIS_KEY"]
 SLIPDB_INSURED_COLS = ["_INSURED_KEY"]
 
+# Konstanta pemfilteran dan pencocokan teks
 _EXCLUDED_REF_MARKERS = ["SUSPENSE", "HUTANG", "UTANG"]
 _LINESLIP_MARKERS = ("LINESLIP", "LINE SLIP")
 _PLACEHOLDERS = frozenset({"", "EMPTY", "NAN", "NONE", "-", "TBA", "NULL", "0"})
 _MIN_KEY_LEN = 4
-
 _MIN_TOKEN_LEN = 3
 _TOKEN_RE = re.compile(r"[^A-Z0-9]+")
+_INSURED_LIKE_THRESHOLD: float = 0.75
+_BANK_RE = re.compile(r"\bBANK\b|\bBPR\b|\bBPD\b")
+_STRONG_WORDS: frozenset = frozenset({"PODOMORO"})
 
+# Daftar stopwords untuk pembersihan nama tertanggung
 _INSURED_STOPWORDS: frozenset = frozenset({
     "PT", "CV", "TBK", "UD", "PD", "NV", "LLC", "LTD", "INC",
-    "GROUP", "GROUPS",
-    "INDONESIA", "INDO",
+    "GROUP", "GROUPS", "INDONESIA", "INDO",
     "INDUSTRY", "INDUSTRIES", "INDUSTRI",
     "INTERNATIONAL", "INTERNASIONAL",
     "COMPANY", "COMPANIES", "CORP", "CORPORATION",
-    "ENTERPRISE", "ENTERPRISES",
-    "TRADING", "TRADE",
+    "ENTERPRISE", "ENTERPRISES", "TRADING", "TRADE",
     "UTAMA", "MANDIRI", "MAKMUR", "SEJAHTERA",
 })
-_STRONG_WORDS: frozenset = frozenset({"PODOMORO"})
-_INSURED_LIKE_THRESHOLD: float = 0.75
 
-_BANK_RE = re.compile(r"\bBANK\b|\bBPR\b|\bBPD\b")
-
+# Kolom-kolom yang digabungkan saat ada akumulasi suspend
 _SUSPEND_JOIN_COLS = [
     "RECEIPT NO", "CREDIT NOTES", "DETAIL RINCIAN NO", "RECEIPT DATE",
     "CEDANT NAME", "CEDANT SHRT NAME",
@@ -112,6 +110,7 @@ _SUSPEND_JOIN_COLS = [
 ]
 _SUSPEND_SUM_COLS = ["AMOUNT ORI"]
 
+# Susunan urutan kolom final output
 FINAL_COLUMNS = [
     "CCOS_DOC_NO", "CCOS_REF_CODE",
     "RECEIPT NO", "CREDIT NOTES", "DETAIL RINCIAN NO", "RECEIPT DATE",
@@ -132,6 +131,7 @@ FINAL_COLUMNS = [
     "SKENARIO",
 ]
 
+# Kolom yang harus diformat sebagai text di file excel
 _TEXT_COLS = [
     "POLIS_ORI",
     "POLICY_CLEAN_1", "SERTIF_CLEAN_1", "POLICY_CLEAN_2", "SERTIF_CLEAN_2",
@@ -141,24 +141,27 @@ _TEXT_COLS = [
 ]
 
 
-# STRING UTILITIES
 @functools.lru_cache(maxsize=131072)
 def _norm_cached(s: str) -> str:
+    # Normalisasi teks kapital dan menghapus spasi ganda dengan cache
     text = s.strip().upper().replace("S/D", "SD")
     return re.sub(r"\s+", " ", text) if "  " in text else text
 
 
 def _normalize(value) -> str:
+    # Mengembalikan teks bersih atau string kosong jika bernilai null
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
     return _norm_cached(str(value))
 
 
 def _valid(value: str) -> bool:
+    # Memeriksa apakah nilai bukan merupakan placeholder kosong
     return value not in _PLACEHOLDERS
 
 
 def _alnum_key(value) -> str:
+    # Mengambil hanya karakter alfanumerik untuk kunci pencocokan
     v = _normalize(value)
     if not v or v in _PLACEHOLDERS:
         return ""
@@ -166,6 +169,7 @@ def _alnum_key(value) -> str:
 
 
 def _format_sertif(val) -> str:
+    # Memformat nomor sertifikat menjadi 6 digit angka
     if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == "":
         return ""
     if isinstance(val, (int, float)):
@@ -178,16 +182,19 @@ def _format_sertif(val) -> str:
 
 @functools.lru_cache(maxsize=200000)
 def _tokenize(text: str) -> frozenset:
+    # Memecah teks menjadi token kata unik dengan panjang minimal
     if not text:
         return frozenset()
     return frozenset(t for t in _TOKEN_RE.split(text) if len(t) >= _MIN_TOKEN_LEN)
 
 
 def _get_cols(columns: list, prefix: str) -> list:
+    # Mengambil daftar kolom yang memiliki awalan prefix tertentu
     return [c for c in columns if str(c).lower().startswith(prefix.lower())]
 
 
 def _to_float(v) -> float:
+    # Mengubah berbagai representasi string/angka menjadi tipe float
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return 0.0
     if isinstance(v, (int, float, np.integer, np.floating)):
@@ -205,8 +212,8 @@ def _to_float(v) -> float:
         return 0.0
 
 
-# ROW HELPERS
 def _is_excluded_ref_row(row: dict, cols: list) -> bool:
+    # Mengecek apakah baris data referensi mengandung kata pengecualian
     for col in cols:
         val = _normalize(row.get(col, ""))
         if val and any(m in val for m in _EXCLUDED_REF_MARKERS):
@@ -215,6 +222,7 @@ def _is_excluded_ref_row(row: dict, cols: list) -> bool:
 
 
 def _is_lineslip_row(sus_row: dict) -> bool:
+    # Mendeteksi apakah baris suspend merupakan transaksi lineslip
     for col in ("INSURED", "DESC 1", "DESC 2", "DESC 3"):
         val = _normalize(sus_row.get(col, ""))
         if val and any(m in val for m in _LINESLIP_MARKERS):
@@ -223,6 +231,7 @@ def _is_lineslip_row(sus_row: dict) -> bool:
 
 
 def _collect_values(row: dict, cols: list, key_fn=None) -> list:
+    # Mengumpulkan nilai unik yang valid dari beberapa kolom pada baris
     seen, result = set(), []
     for col in cols:
         raw = row.get(col, "")
@@ -234,11 +243,12 @@ def _collect_values(row: dict, cols: list, key_fn=None) -> list:
 
 
 def _row_values(row: dict, cols: list) -> set:
+    # Mengembalikan set nilai normalisasi dari kolom-kolom yang diminta
     return set(_collect_values(row, cols))
 
 
-# INDEX BUILDERS
 def _build_exact_index(rows: list, cols: list, key_fn=None, excluded: set = None) -> dict:
+    # Membangun dictionary index nilai eksak terhadap indeks baris
     index: dict = {}
     for i, row in enumerate(rows):
         if excluded and i in excluded:
@@ -249,6 +259,7 @@ def _build_exact_index(rows: list, cols: list, key_fn=None, excluded: set = None
 
 
 def _build_facode_index(rows: list, col: str, excluded: set = None) -> dict:
+    # Membangun dictionary index fac code terhadap nomor indeks baris
     index: dict = {}
     for i, row in enumerate(rows):
         if excluded and i in excluded:
@@ -260,6 +271,7 @@ def _build_facode_index(rows: list, col: str, excluded: set = None) -> dict:
 
 
 def _build_token_index(rows: list, cols: list, excluded: set = None) -> dict:
+    # Membangun inverted index token kata untuk pencocokan like insured
     token_index: dict = {}
     for i, row in enumerate(rows):
         if excluded and i in excluded:
@@ -276,6 +288,7 @@ def _build_token_index(rows: list, cols: list, excluded: set = None) -> dict:
 
 def _build_lookup(rows: list, slip_cols: list, polis_cols: list, insured_cols: list,
                   facode_col: str = None, label: str = "") -> dict:
+    # Membuat seluruh struktur lookup index terbalik untuk dataset target
     if not rows:
         if label:
             print(f"  {label:<6} done (0.0s)", flush=True)
@@ -297,14 +310,15 @@ def _build_lookup(rows: list, slip_cols: list, polis_cols: list, insured_cols: l
     return lookup
 
 
-# MATCH ENGINE
 def _exact_match(query_values: list, index: dict) -> set:
+    # Mencari set indeks baris yang cocok eksak pada index dictionary
     return {i for v in query_values if v and v in index for i in index[v]}
 
 
 def _like_match(query_values: list, token_index: dict, rows: list, ref_cols: list,
                 stopwords: frozenset = _INSURED_STOPWORDS,
                 overlap_threshold: float = _INSURED_LIKE_THRESHOLD) -> list:
+    # Mencocokkan nama tertanggung berdasarkan token fuzzy overlap
     valid_queries = [v for v in query_values if v and len(v) >= 2]
     if not valid_queries:
         return []
@@ -376,6 +390,7 @@ def _like_match(query_values: list, token_index: dict, rows: list, ref_cols: lis
 
 
 def _row_has_insured(ref_row: dict, ref_cols: list, query_values: list) -> bool:
+    # Memeriksa apakah suatu baris referensi memuat salah satu nama tertanggung
     ref_vals = _collect_values(ref_row, ref_cols)
     if not ref_vals or not query_values:
         return False
@@ -391,6 +406,7 @@ def _row_has_insured(ref_row: dict, ref_cols: list, query_values: list) -> bool:
 
 
 def _split_insured_queries(sus: dict, insured_cols: list) -> list:
+    # Memisahkan query pencarian tertanggung per nama atau gabungan entitas bank
     names = _collect_values(sus, insured_cols)
     if not names:
         return []
@@ -401,15 +417,16 @@ def _split_insured_queries(sus: dict, insured_cols: list) -> list:
 
 
 def _group_name(sus: dict) -> str:
+    # Mengambil nama group tertanggung dari kolom DESC 2
     g = _normalize(sus.get(SUSPEND_GROUP_COL, ""))
     if not g or not _valid(g) or len(g) < 3:
         return ""
     return g
 
 
-# FAC CODE RESOLUTION
 def _resolve_facode(ref_rows_matched: list, facode_col: str,
                     facode_osbal_idx: dict) -> list:
+    # Menghubungkan fac code dari Facul atau SlipDB ke baris Osbal
     fac_codes = {_normalize(r.get(facode_col, "")) for r in ref_rows_matched}
     fac_codes.discard("")
     out: set = set()
@@ -419,9 +436,9 @@ def _resolve_facode(ref_rows_matched: list, facode_col: str,
     return list(out)
 
 
-# NARROWING
 def _narrow_currency_periode(sus: dict, idxs: list, osbal_rows: list,
                              effective_date, is_lineslip: bool) -> tuple:
+    # Menyaring kandidat kecocokan berdasarkan kesesuaian mata uang dan periode
     cand = list(idxs)
     sus_curr = _normalize(sus.get(SUSPEND_CURR_COL, ""))
     if sus_curr:
@@ -447,8 +464,8 @@ def _narrow_currency_periode(sus: dict, idxs: list, osbal_rows: list,
     return cand, False, False
 
 
-# OUTPUT BUILDERS
 def _aggregate_ccos(osbal_rows: list, all_fac_osbal_rows: list = None) -> dict:
+    # Menghitung agregasi saldo balance due dan nomor dokumen dari baris Osbal
     fac_codes = {str(r.get("CCOS_REF_CODE", "")).strip() for r in osbal_rows
                  if str(r.get("CCOS_REF_CODE", "")).strip()}
     multi_fac = len(fac_codes) > 1
@@ -472,6 +489,7 @@ def _aggregate_ccos(osbal_rows: list, all_fac_osbal_rows: list = None) -> dict:
 
 
 def _text_or_empty(v) -> str:
+    # Mengembalikan teks bersih atau string kosong jika bernilai nan/none
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
     s = str(v).strip()
@@ -481,6 +499,7 @@ def _text_or_empty(v) -> str:
 def _build_output_row(sus: dict, source: str, scenario: str, osbal_rows: list,
                       osbal_count: int = 0, suspend_count: int = 1,
                       all_fac_osbal_rows: list = None) -> dict:
+    # Membentuk kamus data untuk satu baris laporan output hasil matching
     has_osbal = bool(source and osbal_rows and osbal_rows[0])
     ccos = (_aggregate_ccos(osbal_rows, all_fac_osbal_rows)
             if has_osbal
@@ -531,6 +550,7 @@ def _build_output_row(sus: dict, source: str, scenario: str, osbal_rows: list,
 
 
 def _merge_suspend_rows(rows: list) -> dict:
+    # Menggabungkan data baris suspend yang memiliki fac code sama dalam akumulasi
     if len(rows) == 1:
         return rows[0]
     merged: dict = {}
@@ -548,6 +568,7 @@ def _merge_suspend_rows(rows: list) -> dict:
 
 
 def _compute_derived_cols(df: pd.DataFrame) -> pd.DataFrame:
+    # Menghitung selisih nominal dan menentukan klasifikasi status FLAG_PROD
     amount_base = df.get("AMOUNT ORI", pd.Series([0] * len(df), index=df.index))
     if "_MERGED_AMOUNT_ORI" in df.columns:
         amount_raw = df["_MERGED_AMOUNT_ORI"].combine_first(amount_base)
@@ -599,8 +620,18 @@ def _compute_derived_cols(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# PIPELINE
+def _format_skenario(row) -> str:
+    # Memformat teks deskripsi skenario berdasarkan hasil status akhir
+    sken, flag = str(row["SKENARIO"]), str(row["FLAG_PROD"])
+    if sken in ("UNMATCHED", "Unmatching"):
+        return "Unmatching"
+    if flag == "Matching >1 fac code":
+        return f"{sken} (> 1 Fac)"
+    return f"{sken} ({flag})"
+
+
 def _load_excel(path: str, label: str, optional: bool = False, header: int = 0) -> tuple:
+    # Membaca data excel atau memuat dari pickle cache jika tersedia
     if not os.path.exists(path):
         print(f"  {label}: {path} ({'tidak ada, dilewati' if optional else 'TIDAK DITEMUKAN'})", flush=True)
         return [], []
@@ -620,9 +651,29 @@ def _load_excel(path: str, label: str, optional: bool = False, header: int = 0) 
     print(f"  {label}: {path} ...", flush=True)
     try:
         df = pd.read_excel(path, header=header)
+    except PermissionError:
+        if os.path.exists(cache):
+            print(f"  [WARN] {label} sedang dibuka di Excel, fallback membaca dari cache ...", flush=True)
+            data, hdr = pd.read_pickle(cache)
+            return data, hdr
+        import shutil, tempfile
+        tmp = os.path.join(tempfile.gettempdir(), os.path.basename(path))
+        shutil.copy2(path, tmp)
+        df = pd.read_excel(tmp, header=header)
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
     except Exception as e:
         print(f"  [RETRY] engine default gagal ({e}), coba openpyxl ...", flush=True)
-        df = pd.read_excel(path, header=header, engine="openpyxl")
+        try:
+            df = pd.read_excel(path, header=header, engine="openpyxl")
+        except PermissionError:
+            if os.path.exists(cache):
+                print(f"  [WARN] {label} sedang dibuka di Excel, fallback membaca dari cache ...", flush=True)
+                data, hdr = pd.read_pickle(cache)
+                return data, hdr
+            raise
 
     hdr = list(df.columns)
     data = df.to_dict("records")
@@ -636,6 +687,7 @@ def _load_excel(path: str, label: str, optional: bool = False, header: int = 0) 
 
 
 def _prepare_slipdb(rows: list) -> None:
+    # Menyiapkan kolom kunci alfanumerik pada data referensi R/I Slip DB
     for r in rows:
         r["_SLIP_KEY"] = _alnum_key(r.get(SLIPDB_RAW_SLIP, ""))
         r["_POLIS_KEY"] = _alnum_key(r.get(SLIPDB_RAW_POLIS, ""))
@@ -645,12 +697,13 @@ def _prepare_slipdb(rows: list) -> None:
 
 
 def run() -> None:
+    # Menjalankan seluruh alur proses pencocokan data suspend Mitrautama
     t_start = time.perf_counter()
     print("\n" + "=" * 60, flush=True)
     print("  SUSPEND MATCHING  (MITRAUTAMA) -- matching_mure", flush=True)
     print("=" * 60, flush=True)
 
-    # 1. Load data
+    # 1. Memuat seluruh sumber data
     print("\n[1/5] Loading data ...", flush=True)
     suspend_rows, suspend_cols = _load_excel(SUSPEND_FILE, "SUSPEND")
     osbal_rows, osbal_cols = _load_excel(OSBAL_FILE, "OSBAL")
@@ -661,6 +714,7 @@ def run() -> None:
         print("  [ERROR] Data Suspend / Osbal kosong. Proses dihentikan.", flush=True)
         return
 
+    # Validasi kelengkapan kolom kunci
     for label, cols, need in [
         ("SUSPEND", suspend_cols, [SUSPEND_SLIP_PREFIX, SUSPEND_INSURED_PREFIX, SUSPEND_GROUP_COL,
                                    SUSPEND_CURR_COL, SUSPEND_DATE_COL, "AMOUNT ORI"]),
@@ -673,10 +727,13 @@ def run() -> None:
     if slipdb_rows:
         _prepare_slipdb(slipdb_rows)
 
+    # Parsing tanggal pada data Osbal
     for r in osbal_rows:
         raw = r.get(OSBAL_DATE_COL, "")
         r["_com_date_parsed"] = pd.to_datetime(raw, errors="coerce") \
             if raw is not None and not (isinstance(raw, float) and pd.isna(raw)) and raw != "" else None
+
+    # Parsing tanggal dan evaluasi status lineslip pada Suspend
     lineslip_count = 0
     for r in suspend_rows:
         raw = r.get(SUSPEND_DATE_COL, "")
@@ -692,14 +749,14 @@ def run() -> None:
             r["_sus_date_lineslip"] = None
     print(f"  -> {lineslip_count:,} baris LINESLIP terdeteksi", flush=True)
 
-    # 2. Kolom suspend
+    # 2. Mendeteksi nama kolom pada dataset suspend
     print("\n[2/5] Detecting columns ...", flush=True)
     slip_sus = _get_cols(suspend_cols, SUSPEND_SLIP_PREFIX)
     insured_sus = _get_cols(suspend_cols, SUSPEND_INSURED_PREFIX)
     polis_sus = _get_cols(suspend_cols, SUSPEND_POLIS_PREFIX)
     print(f"  slip={slip_sus} insured={insured_sus} polis={polis_sus}", flush=True)
 
-    # 3. Index
+    # 3. Membangun indeks lookup pencarian
     print("\n[3/5] Building lookup indexes ...", flush=True)
     lk_osbal = _build_lookup(osbal_rows, OSBAL_SLIP_COLS, OSBAL_POLIS_COLS, OSBAL_INSURED_COLS,
                              OSBAL_FACODE_COL, "OSBAL")
@@ -709,9 +766,11 @@ def run() -> None:
                               SLIPDB_FACODE_COL, "SLIPDB")
     facode_osbal_idx = lk_osbal["facode"]
 
+    # Cache lokal untuk pencarian referensi silang
     _via_cache: dict = {}
 
     def _via_refs(kind: str, queries: list, like: bool = False) -> tuple:
+        # Melakukan pencarian data referensi dengan memanfaatkan cache lokal
         if not queries:
             return set(), None
         ckey = (kind, like, tuple(queries))
@@ -722,6 +781,7 @@ def run() -> None:
         return res
 
     def _via_refs_raw(kind: str, queries: list, like: bool) -> tuple:
+        # Eksekusi pencarian kandidat ke Osbal, SlipDB, dan Facul
         if like:
             def finder(rows, lk, cols):
                 if not lk["tok_insured"]:
@@ -747,7 +807,12 @@ def run() -> None:
                     return set(res), src
         return set(), None
 
+    def _row_values_keyed(row: dict, cols: list) -> set:
+        # Helper set nilai alfanumerik per baris
+        return set(_collect_values(row, cols, _alnum_key))
+
     def _narrow_combo(cands: set, scenario: str, sus: dict, used: str, order: list) -> tuple:
+        # Menyempitkan kandidat multi-fac dengan parameter sekunder
         def n_fac(idxs):
             return len({_normalize(osbal_rows[i].get(OSBAL_FACODE_COL, "")) for i in idxs})
 
@@ -773,10 +838,7 @@ def run() -> None:
                     scenario = f"{scenario.replace(' only', '')} + {tag}"
         return set(cur), scenario
 
-    def _row_values_keyed(row: dict, cols: list) -> set:
-        return set(_collect_values(row, cols, _alnum_key))
-
-    # 4. Matching per baris
+    # 4. Melakukan matching iteratif per baris suspend
     total = len(suspend_rows)
     print(f"\n[4/5] Matching {total:,} suspend rows ...", flush=True)
     t4 = time.perf_counter()
@@ -794,6 +856,7 @@ def run() -> None:
         is_ls = sus.get("_is_lineslip", False)
         eff_date = sus.get("_sus_date_lineslip") if is_ls else sus.get("_sus_date_parsed")
 
+        # Pencocokan via slip
         def phase_slip():
             vals = [v for v in _collect_values(sus, slip_sus, _alnum_key) if len(v) >= _MIN_KEY_LEN]
             if not vals:
@@ -803,9 +866,23 @@ def run() -> None:
                 return idx, src, "Slip only"
             idx = _exact_match(vals, lk_osbal["polis"])
             if idx:
-                return set(idx), "OSBAL", "Slip to polis"
+                return set(idx), "OSBAL", "Slip only"
             return set(), None, ""
 
+        # Pencocokan via polis
+        def phase_polis():
+            vals = [v for v in _collect_values(sus, polis_sus, _alnum_key) if len(v) >= _MIN_KEY_LEN]
+            if not vals:
+                return set(), None, ""
+            idx, src = _via_refs("polis", vals)
+            if idx:
+                return idx, src, "Polis only"
+            idx = _exact_match(vals, lk_osbal["slip"])
+            if idx:
+                return set(idx), "OSBAL", "Polis to slip"
+            return set(), None, ""
+
+        # Pencocokan via insured
         def phase_insured():
             grp_tokens = _tokenize(_group_name(sus)) - _INSURED_STOPWORDS
 
@@ -833,6 +910,7 @@ def run() -> None:
                     return idx, src, "Insured only"
             return set(), None, ""
 
+        # Pencocokan via group name
         def phase_group():
             g = _group_name(sus)
             if not g:
@@ -840,7 +918,7 @@ def run() -> None:
             idx, src = _via_refs("insured", [g], like=True)
             return (idx, src, "Insured only") if idx else (set(), None, "")
 
-        phases = [("slip", phase_slip), ("insured", phase_insured), ("group", phase_group)]
+        phases = [("slip", phase_slip), ("polis", phase_polis), ("insured", phase_insured), ("group", phase_group)]
 
         accepted = None
         fallback = None
@@ -849,6 +927,7 @@ def run() -> None:
             if not cands:
                 continue
             order = {"slip": ["polis", "insured"],
+                     "polis": ["slip", "insured"],
                      "insured": ["slip", "polis"],
                      "group": ["polis", "insured", "slip"]}[used]
             cands, scen = _narrow_combo(cands, scen, sus, used, order)
@@ -877,7 +956,7 @@ def run() -> None:
 
     print(f"  Matching selesai dalam {time.perf_counter()-t4:.1f}s", flush=True)
 
-    # 4b. Klaim Fac Code & akumulasi
+    # 4b. Pengelompokan fac code tunggal dan akumulasi nominal
     print("\n[4b/5] Fac code claim & akumulasi ...", flush=True)
     _EXCL = {"Unmatching", "UNMATCHED"}
 
@@ -893,6 +972,7 @@ def run() -> None:
         else:
             final.append(r)
 
+    # Menggabungkan saldo suspend untuk fac code yang sama
     for fac, group in groups.items():
         if len(group) == 1:
             group[0]["suspend_count"] = 1
@@ -910,7 +990,7 @@ def run() -> None:
             final.append(g)
     print(f"  {len(raw_results):,} suspend rows -> {len(final):,} output rows", flush=True)
 
-    # 5. Output
+    # 5. Membangun baris akhir output
     print(f"\n[5/5] Building output ({len(final):,} rows) ...", flush=True)
     output_rows = []
     for r in final:
@@ -946,14 +1026,7 @@ def run() -> None:
     df = _compute_derived_cols(df)
     df.loc[df["SKENARIO"].isin(["UNMATCHED", "Unmatching"]), "FLAG_PROD"] = "Unmatching"
 
-    def _format_skenario(row):
-        sken, flag = str(row["SKENARIO"]), str(row["FLAG_PROD"])
-        if sken in ("UNMATCHED", "Unmatching"):
-            return "Unmatching"
-        if flag == "Matching >1 fac code":
-            return f"{sken} (> 1 Fac)"
-        return f"{sken} ({flag})"
-
+    # Penyesuaian nama skenario dengan format label akhir
     cond = df["FLAG_PROD"].isin(["Beda Currency", "Beda Periode", "Matching >1 fac code"]) \
         & ~df["SKENARIO"].isin(["UNMATCHED", "Unmatching"])
     if cond.any():
@@ -961,12 +1034,13 @@ def run() -> None:
 
     df["SKENARIO"] = df["SKENARIO"].str.replace(r"\bGroup\b", "Insured", regex=True)
 
+    # Menjamin urutan dan keberadaan seluruh kolom final
     for col in FINAL_COLUMNS:
         if col not in df.columns:
             df[col] = ""
     df = df[FINAL_COLUMNS]
 
-    # Export
+    # Menyimpan file excel hasil matching
     print(f"\nSaving to: {OUTPUT_FILE} ...", flush=True)
     for c in df.select_dtypes(include=["object", "string"]).columns:
         df[c] = df[c].astype(str).str.replace(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', regex=True)
@@ -980,6 +1054,7 @@ def run() -> None:
         print(f"  [PERINGATAN] {OUTPUT_FILE} sedang dibuka di Excel! Menyimpan ke: {save_path} ...", flush=True)
         df.to_excel(save_path, index=False)
 
+    # Format cell teks pada openpyxl
     try:
         from openpyxl import load_workbook
         wb = load_workbook(save_path)
