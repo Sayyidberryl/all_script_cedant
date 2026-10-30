@@ -62,9 +62,18 @@ SLIPDB_FILE  = _find_file_in(_RAW_DIR, [
 ])
 OUTPUT_FILE  = os.path.join(_BASE_DIR, "matching_tpi.xlsx")
 
-# [TPI] Tidak ada BORDERO_FILE.
-# TPI tidak punya data Open Cover Marine Cargo. Variabel ini tidak
-# dideklarasikan agar jalur bordero tidak pernah dieksekusi secara struktural.
+# [TPI] Path folder Bordero / Open Cover (OC MC)
+BORDERO_DIR = os.path.join(_BASE_DIR, "data_oc")
+
+
+def _find_bordero_files() -> list:
+    """Mencari semua file Bordero (Open Cover) di folder data_oc/."""
+    files = []
+    if os.path.exists(BORDERO_DIR):
+        for fname in sorted(os.listdir(BORDERO_DIR)):
+            if fname.lower().endswith((".xlsx", ".xls")) and not fname.startswith("~$"):
+                files.append(os.path.join(BORDERO_DIR, fname))
+    return files
 
 # Kolom FAC CODE di masing-masing tabel referensi
 OSBAL_FACODE_COL  = "CCOS_REF_CODE"
@@ -96,7 +105,7 @@ _DELIMITER_RE  = re.compile(r"[,;|+\s]+")
 
 # Token generik yang dikecualikan saat menghitung overlap INSURED (kurangi false positive).
 _INSURED_STOPWORDS: frozenset = frozenset({
-    "PT", "CV", "TBK", "UD", "PD", "NV", "LLC", "LTD", "INC",
+    "PT", "CV", "TBK", "UD", "PD", "NV", "LLC", "LTD", "INC", "KSO",
     "GROUP", "GROUPS",
     "INDONESIA", "INDO",
     "INDUSTRY", "INDUSTRIES", "INDUSTRI",
@@ -146,6 +155,21 @@ FINAL_COLUMNS = [
     "STATUS", "REC_TYPE",
     "SKENARIO",
 ]
+
+# [TPI] Daftar 23 nomor polis suspect unmatching yang memiliki karakteristik nomor slip OSBAL (10 digit diawali '51')
+POLIS_SUSPECT_ALL: frozenset = frozenset({
+    "5100751977", "5100730068", "5100715233", "5100714721", "5100714675",
+    "5100703829", "5100687599", "5100277005", "5100252873", "5100244362",
+    "5100244323", "5100244285", "5100244245", "5100232881", "5100232695",
+    "5100232017", "5100231835", "5100174075", "5100149074", "5100149073",
+    "5100070515", "5100065374", "5100030254",
+})
+
+def _is_suspect_polis_as_slip(val: str) -> bool:
+    if not val:
+        return False
+    digits = re.sub(r'\D', '', str(val))
+    return (digits in POLIS_SUSPECT_ALL) or (len(digits) == 10 and digits.startswith('51'))
 
 
 # =============================================================================
@@ -216,7 +240,7 @@ def _map_scenario(label: str) -> str:
 def _clean_base_match(scenario: str) -> str:
     """Bersihkan suffix tambahan dari skenario dasar."""
     s = str(scenario or "").strip()
-    for to_remove in [" (Beda Currency)", " (Beda Periode)", " (Matching >1 fac code)"]:
+    for to_remove in [" (Beda Currency)", " (Beda Periode)", " (> 1 Fac)", " (Matching >1 fac code)", " (> 1 fac code)"]:
         s = s.replace(to_remove, "")
     s = s.strip()
     if s.startswith("Slip + Polis"):
@@ -229,37 +253,31 @@ def _clean_base_match(scenario: str) -> str:
 def _format_final_scenario(
     base_scenario: str,
     source: str,
+    is_bordero: bool,
     is_beda_curr: bool,
     is_beda_per: bool,
     num_fac: int,
 ) -> str:
-    """Format skenario final sesuai pola ACA (tanpa Bordero untuk TPI).
-
-    Daftar skenario yang dihasilkan:
-      Insured only
-      Insured only (Matching >1 fac code)
-      Slip only
-      Unmatching
-      Slip + Insured
-      Insured only (Beda Currency)
-      Slip only (Matching >1 fac code)
-      Slip + Insured (Beda Currency)
-      Slip only (Beda Currency)
-      ... dst.
-    """
+    """Format skenario final sesuai pola ACA & Astra (termasuk Bordero)."""
     if not source or not base_scenario or str(base_scenario).strip().upper() in ("UNMATCHING", "UNMATCHED"):
         return "Unmatching"
 
     base = _clean_base_match(base_scenario)
     if not base or base.upper() in ("UNMATCHING", "UNMATCHED"):
+        base = "Polis only" if is_bordero else "Unmatching"
+    if base == "Unmatching":
         return "Unmatching"
 
     if is_beda_curr:
         return f"{base} (Beda Currency)"
     elif is_beda_per:
         return f"{base} (Beda Periode)"
-    elif num_fac > 1:
-        return f"{base} (Matching >1 fac code)"
+    elif is_bordero and num_fac > 1:
+        return f"{base} (> 1 Fac Bordero)"
+    elif is_bordero and num_fac <= 1:
+        return f"{base} (Bordero)"
+    elif not is_bordero and num_fac > 1:
+        return f"{base} (> 1 Fac)"
     else:
         return base
 
@@ -460,46 +478,75 @@ def _build_lookup(rows: list, polis_cols: list, slip_cols: list,
 
 
 
+def _clean_tokens_for_insured(s: str) -> list:
+    """Bersihkan string nama insured dan tokenize menjadi list kata signifikan."""
+    if not s:
+        return []
+    return [
+        w for w in re.split(r'[\s\-_/,\.]+', str(s).upper().strip())
+        if w and w not in _INSURED_STOPWORDS and len(w) >= 2
+    ]
+
+
+def _is_insured_match_strict(sus_str: str, ref_str: str) -> bool:
+    """Cek kecocokan insured dengan aturan asimetris ketat:
+    - Jika suspend >= 2 kata signifikan:
+      * Reference DILARANG match jika hanya 1 kata (holding/entitas induk).
+      * Reference harus cocok 2 kata awal identik / progresif (>= 4 char), ATAU
+        memiliki irisan minimal 2 kata signifikan identik.
+    - Jika suspend 1 kata: kata harus identik persis.
+    """
+    s = str(sus_str).upper().strip()
+    r = str(ref_str).upper().strip()
+    if not s or not r:
+        return False
+    if s == r or _normalize(s) == _normalize(r):
+        return True
+
+    st = _clean_tokens_for_insured(s)
+    rt = _clean_tokens_for_insured(r)
+    if not st or not rt:
+        return False
+
+    if len(st) >= 2:
+        if len(rt) < 2:
+            return False
+        w1 = (st[0] == rt[0]) or (len(st[0]) >= 4 and (st[0].startswith(rt[0]) or rt[0].startswith(st[0])))
+        w2 = (len(st) > 1 and len(rt) > 1) and ((st[1] == rt[1]) or (len(st[1]) >= 4 and (st[1].startswith(rt[1]) or rt[1].startswith(st[1]))))
+        if w1 and w2:
+            return True
+        return len(set(st) & set(rt)) >= 2
+    else:
+        return st[0] == rt[0]
+
+
 def _ref_matches_insured(ref_row: dict, insured_ref_cols: list, sus_ins_vals: list) -> bool:
-    """Cek apakah insured suspend cocok dengan referensi (INSURED_CLEAN atau FAC_INSURED_ORI / QQ / /)."""
+    """Cek apakah insured suspend cocok dengan referensi (INSURED_CLEAN atau FAC_INSURED_ORI / QQ / /).
+    Menggunakan _is_insured_match_strict agar tidak terjadi false match multi-kata ke holding 1 kata.
+    """
     if not sus_ins_vals:
         return False
     # 1. Cek exact lewat kolom clean standar
     if _ref_has_value(ref_row, insured_ref_cols, "insured_ori", sus_ins_vals):
         return True
 
-    # 2. [TPI] Cek token match lewat kolom-kolom INSURED_CLEAN
-    for c in insured_ref_cols:
-        val = ref_row.get(c, "")
-        if val and str(val) != "nan":
-            toks = _tokenize(str(val)) - _INSURED_STOPWORDS
-            for sus_v in sus_ins_vals:
-                sus_toks = _tokenize(sus_v) - _INSURED_STOPWORDS
-                if toks and sus_toks:
-                    if toks.issubset(sus_toks) or sus_toks.issubset(toks):
-                        return True
-                    common = len(toks & sus_toks)
-                    if (common / min(len(toks), len(sus_toks))) >= 0.6:
-                        return True
-
-    # 3. [TPI] Cek FAC_INSURED_ORI (termasuk subsidiary setelah 'QQ' / 'C/O' / '/')
-    fac_ins_ori = _normalize(ref_row.get("FAC_INSURED_ORI", ""))
-    if fac_ins_ori:
-        subsidiary_parts = [p.strip() for p in fac_ins_ori.replace('/', ' QQ ').replace('C/O', ' QQ ').split('QQ') if p.strip()]
-        subsidiary_parts.append(fac_ins_ori)
-
-        for ins_v in sus_ins_vals:
-            if not ins_v:
-                continue
-            sus_tokens = _tokenize(ins_v) - _INSURED_STOPWORDS
-            for sp in subsidiary_parts:
-                sp_tokens = _tokenize(sp) - _INSURED_STOPWORDS
-                if sus_tokens and sp_tokens:
-                    if sp_tokens.issubset(sus_tokens) or sus_tokens.issubset(sp_tokens):
-                        return True
-                    common = len(sus_tokens & sp_tokens)
-                    if common > 0 and (common / min(len(sus_tokens), len(sp_tokens))) >= 0.6:
-                        return True
+    for sus_v in sus_ins_vals:
+        if not sus_v:
+            continue
+        # 2. Cek lewat kolom-kolom INSURED_CLEAN
+        for c in insured_ref_cols:
+            val = ref_row.get(c, "")
+            if val and str(val) != "nan":
+                if _is_insured_match_strict(sus_v, str(val)):
+                    return True
+        # 3. Cek FAC_INSURED_ORI (termasuk subsidiary setelah 'QQ' / 'C/O' / '/')
+        fac_ori = ref_row.get("FAC_INSURED_ORI", "")
+        if fac_ori and str(fac_ori) != "nan":
+            parts = [p.strip() for p in str(fac_ori).replace('/', ' QQ ').replace('C/O', ' QQ ').split('QQ') if p.strip()]
+            parts.append(str(fac_ori))
+            for p in parts:
+                if _is_insured_match_strict(sus_v, p):
+                    return True
     return False
 
 
@@ -524,6 +571,11 @@ def _like_match(
       SUBSTR  - seluruh string query ada sebagai substring di nilai referensi.
       SUBSET  - semua token signifikan query adalah subset dari token referensi.
       OVERLAP - overlap coefficient |A intersect B| / min(|A|, |B|) >= threshold.
+
+    [TPI Strict Rule]:
+      Jika query memiliki >= 2 kata signifikan:
+      - Referensi dengan < 2 kata signifikan (holding) DILARANG cocok.
+      - Jika irisan < 2 kata, wajib memenuhi 2 kata awal identik / progresif (>= 4 char).
     """
     valid_queries = [v for v in query_values if v and len(v) >= 2]
     if not valid_queries:
@@ -534,6 +586,7 @@ def _like_match(
         query_tokens = query_tokens | _tokenize(v)
 
     sig_query_tokens = query_tokens - stopwords
+    is_query_multi = len(sig_query_tokens) >= 2
 
     candidates: set = set()
     for tok in query_tokens:
@@ -564,6 +617,10 @@ def _like_match(
 
         sig_ref_tokens = ref_tokens - stopwords
 
+        # [TPI] Jika query >= 2 kata signifikan, referensi < 2 kata (holding) TIDAK boleh cocok
+        if is_query_multi and len(sig_ref_tokens) < 2:
+            continue
+
         if sig_query_tokens and sig_query_tokens.issubset(ref_tokens):
             if i not in matched_set:
                 matched_set[i] = "SUBSET"
@@ -571,6 +628,16 @@ def _like_match(
 
         if sig_query_tokens and sig_ref_tokens:
             intersection = len(sig_query_tokens & sig_ref_tokens)
+
+            # [TPI] Jika query >= 2 kata, wajib minimal 2 kata sama atau 2 kata awal progresif
+            if is_query_multi and intersection < 2:
+                st = list(sig_query_tokens)
+                rt = list(sig_ref_tokens)
+                w1 = (st[0] == rt[0]) or (len(st[0]) >= 4 and (st[0].startswith(rt[0]) or rt[0].startswith(st[0])))
+                w2 = (len(st) > 1 and len(rt) > 1) and ((st[1] == rt[1]) or (len(st[1]) >= 4 and (st[1].startswith(rt[1]) or rt[1].startswith(st[1]))))
+                if not (w1 and w2):
+                    continue
+
             denom = min(len(sig_query_tokens), len(sig_ref_tokens))
             if denom > 0 and (intersection / denom) >= overlap_threshold:
                 if i not in matched_set:
@@ -899,6 +966,186 @@ def _merge_suspend_rows(rows: list) -> dict:
     return merged
 
 
+_BULAN_MAP = {
+    "JANUARI": 1, "FEBRUARI": 2, "MARET": 3, "APRIL": 4,
+    "MEI": 5, "JUNI": 6, "JULI": 7, "AGUSTUS": 8,
+    "SEPTEMBER": 9, "OKTOBER": 10, "NOVEMBER": 11, "DESEMBER": 12,
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
+def _build_bordero_index(bordero_rows: list) -> tuple:
+    """Bangun index dari file Bordero / Open Cover."""
+    idx = {}
+    polis_idx = {}
+    slip_idx = {}
+    for r in bordero_rows:
+        fac = _normalize(r.get("FACCODE", "") or r.get("FAC CODE", "") or r.get("FAC_CODE", ""))
+        if not fac:
+            continue
+        bulan_str = str(r.get("BULAN", "")).strip().upper()
+        tahun_str = str(r.get("TAHUN", "")).strip()
+        month = _BULAN_MAP.get(bulan_str, 0)
+        ym = (int(tahun_str), month) if month and tahun_str.isdigit() else None
+
+        raw_pol = str(r.get("POLIS", "")).strip()
+        pol_clean = _normalize(raw_pol.split("/")[0].strip()) if raw_pol else ""
+
+        raw_slip = str(r.get("SLIP", "")).strip()
+        slip_clean = _normalize(raw_slip.split("/")[0].strip()) if raw_slip else ""
+
+        entry = {
+            "fac":     fac,
+            "polis":   pol_clean,
+            "slip":    slip_clean,
+            "insured": _normalize(r.get("INSURED", "")),
+            "curr":    _normalize(r.get("CURR", "")),
+            "period":  ym,
+            "net":     r.get("NET"),
+        }
+        idx.setdefault(fac, []).append(entry)
+        if pol_clean:
+            polis_idx.setdefault(pol_clean, []).append((fac, entry))
+        if slip_clean:
+            slip_idx.setdefault(slip_clean, []).append((fac, entry))
+
+    return idx, polis_idx, slip_idx
+
+
+def _find_fac_codes_in_bordero(
+    suspend_row: dict,
+    bordero_idx: dict,
+    eff_polis: list,
+    slip_sus_cols: list,
+    bordero_polis_index: dict = None,
+    bordero_slip_index: dict = None,
+) -> tuple:
+    """Teknik 2: Override - Mencari kemungkinan match secara exact via Bordero."""
+    if not bordero_idx:
+        return set(), False
+
+    sus_polis = set(_collect_clean_values(suspend_row, eff_polis))
+    for c in [CLSDT_POLIS_COL, FAC_POLIS_COL, "polis_ori"]:
+        v = _normalize(suspend_row.get(c, ""))
+        if v:
+            sus_polis.add(v)
+
+    sus_slip = set(_collect_clean_values(suspend_row, slip_sus_cols))
+    for c in [CLSDT_SLIP_COL, FAC_SLIP_COL, "slip_ori", "SLIP_NO_ORI"]:
+        v = _normalize(suspend_row.get(c, ""))
+        if v:
+            sus_slip.add(v)
+
+    polis_f = {sp for sp in sus_polis if len(sp) >= 5}
+    slip_f  = {ss for ss in sus_slip if len(ss) >= 5}
+
+    sus_amount = suspend_row.get("AMOUNT ORI")
+    try:
+        sus_amount_f = float(sus_amount) if sus_amount is not None else None
+    except (ValueError, TypeError):
+        sus_amount_f = None
+
+    sus_date = suspend_row.get("_sus_date_parsed")
+    sus_ym = (sus_date.year, sus_date.month) if sus_date is not None else None
+    sus_curr_val = _normalize(suspend_row.get(SUSPEND_CURR_COL, ""))
+
+    candidates = {}
+
+    # 1. Cek Polis di Bordero
+    if bordero_polis_index is not None and polis_f:
+        matched_b_polis = set()
+        for bp in polis_f:
+            if bp in bordero_polis_index:
+                matched_b_polis.add(bp)
+        if not matched_b_polis:
+            matched_b_polis = {bp for bp in bordero_polis_index for sp in polis_f if sp == bp or sp in bp or bp in sp}
+
+        for bp in matched_b_polis:
+            for fac, r in bordero_polis_index[bp]:
+                candidates.setdefault(fac, []).append(r)
+
+    # 2. Cek Slip di Bordero
+    if bordero_slip_index is not None and slip_f:
+        for bs in slip_f:
+            if bs in bordero_slip_index:
+                for fac, r in bordero_slip_index[bs]:
+                    candidates.setdefault(fac, []).append(r)
+
+    if not candidates:
+        return set(), False
+
+    # 3. Filter Wajib: Currency & Periode (eym <= sus_ym)
+    wajib_filtered = {}
+    for fac, rows in candidates.items():
+        valid = []
+        for r in rows:
+            ec = r.get("curr", "")
+            c_ok = not sus_curr_val or not ec or ec == sus_curr_val
+            eym = r.get("period")
+            p_ok = sus_ym is None or not eym or eym <= sus_ym
+            if c_ok and p_ok:
+                valid.append(r)
+        if valid:
+            wajib_filtered[fac] = valid
+    if wajib_filtered:
+        candidates = wajib_filtered
+
+    # 4. Filter Exact NET (jika sus_amount tersedia)
+    if sus_amount_f is not None:
+        net_filtered = {}
+        for fac, rows in candidates.items():
+            valid = []
+            for r in rows:
+                try:
+                    b_net = float(r.get("net")) if r.get("net") is not None else None
+                except (ValueError, TypeError):
+                    b_net = None
+                if b_net is not None and abs(abs(b_net) - abs(sus_amount_f)) < 0.05:
+                    valid.append(r)
+            if valid:
+                net_filtered[fac] = valid
+        if net_filtered:
+            candidates = net_filtered
+
+    return set(candidates.keys()), bool(candidates)
+
+
+def _narrow_by_amount_net(
+    suspend_row: dict,
+    fac_codes: set,
+    bordero_idx: dict,
+    tolerance_pct: float = 0.0,
+) -> tuple:
+    """Teknik 1: Narrowing - Menyempitkan multi-FAC (> 1 Fac) berdasarkan exact match NET di Bordero."""
+    if len(fac_codes) <= 1 or not bordero_idx:
+        return fac_codes, False
+    try:
+        amount_ori = abs(float(suspend_row.get("AMOUNT ORI", 0) or 0))
+    except (ValueError, TypeError):
+        return fac_codes, False
+    if amount_ori == 0:
+        return fac_codes, False
+
+    tolerance = amount_ori * tolerance_pct
+
+    matched_facs = set()
+    for fac in fac_codes:
+        entries = bordero_idx.get(fac, [])
+        if not entries:
+            continue
+        for e in entries:
+            try:
+                n = float(e.get("net")) if e.get("net") is not None else None
+            except (ValueError, TypeError):
+                n = None
+            if n is not None and abs(abs(n) - amount_ori) <= (tolerance + 0.05):
+                matched_facs.add(fac)
+                break
+
+    return (matched_facs, True) if len(matched_facs) == 1 else (fac_codes, False)
+
+
 def _compute_derived_cols(df: pd.DataFrame) -> pd.DataFrame:
     """Hitung AMOUNT_ORI_MIN1, DIFERENCE, dan FLAG_PROD (10 kategori).
 
@@ -946,10 +1193,17 @@ def _compute_derived_cols(df: pd.DataFrame) -> pd.DataFrame:
     else:
         is_beda_currency = skenario_col.str.contains("Beda Currency", na=False, regex=False)
 
-    # [TPI] is_gt1_ocmc: selalu False karena TPI tidak punya bordero
-    # is_gt1_fac: deteksi dari skenario "(Matching >1 fac code)" sesuai pola ACA
-    is_gt1_ocmc          = pd.Series(False, index=df.index)
-    is_gt1_fac           = skenario_col.str.contains("Matching >1 fac code", na=False, regex=False) | (ccos_ref.str.contains(",", na=False) & ~is_gt1_ocmc)
+    # [TPI] is_gt1_ocmc: deteksi dari skenario "(> 1 Fac Bordero)" atau multi-FAC dengan tag Bordero
+    # is_gt1_fac: deteksi dari skenario "(> 1 Fac)" sesuai pola ACA
+    is_gt1_ocmc          = (
+        skenario_col.str.contains("> 1 Fac Bordero", na=False, regex=False)
+        | (skenario_col.str.contains("(Bordero)", na=False, regex=False) & ccos_ref.str.contains(",", na=False))
+    )
+    is_gt1_fac           = (
+        skenario_col.str.contains("> 1 Fac", na=False, regex=False)
+        | skenario_col.str.contains("Matching >1 fac code", na=False, regex=False)
+        | (ccos_ref.str.contains(",", na=False) & ~is_gt1_ocmc)
+    )
     is_new_entry_total   = (amount_ori != 0) & (balance_due == 0)
     is_adj_total         = is_equal
     is_adj_sebagian      = ~is_equal & (amount_neg < balance_due)
@@ -999,11 +1253,12 @@ def _load_excel(path: str, label: str, optional: bool = False) -> tuple:
 
     t = time.perf_counter()
     print(f"  {label}: {path} ...", flush=True)
+    header_row = 1 if "Slip" in os.path.basename(path) else 0
     try:
-        df = pd.read_excel(path)
+        df = pd.read_excel(path, header=header_row)
     except Exception as e:
         print(f"  [RETRY] engine default gagal ({e}), coba openpyxl ...", flush=True)
-        df = pd.read_excel(path, engine="openpyxl")
+        df = pd.read_excel(path, engine="openpyxl", header=header_row)
 
     header = list(df.columns)
     data   = df.to_dict("records")
@@ -1036,8 +1291,22 @@ def run() -> None:
     osbal_rows,   osbal_cols   = _load_excel(OSBAL_FILE,   "OSBAL")
     facul_rows,   facul_cols   = _load_excel(FACUL_FILE,   "FACUL")
     slipdb_rows,  slipdb_cols  = _load_excel(SLIPDB_FILE,  "SLIPDB", optional=True)
-    print("  Bordero: TIDAK DIGUNAKAN untuk TPI (fase dihapus dari pipeline)", flush=True)
-    print("  FASE 1 DESC_3_CLEAN: TIDAK DITERAPKAN untuk TPI", flush=True)
+    bordero_files = _find_bordero_files()
+    bordero_rows = []
+    if bordero_files:
+        print(f"  Bordero (Open Cover) : Ditemukan {len(bordero_files)} file di data_oc/", flush=True)
+        for bf in bordero_files:
+            b_r, _ = _load_excel(bf, f"BORDERO ({os.path.basename(bf)})", optional=True)
+            bordero_rows.extend(b_r)
+    else:
+        print("  Bordero (Open Cover) : tidak ada file di data_oc/ (dilewati)", flush=True)
+
+    bordero_idx, bordero_polis_idx, bordero_slip_idx = (
+        _build_bordero_index(bordero_rows) if bordero_rows else ({}, {}, {})
+    )
+    if bordero_idx:
+        print(f"  -> Bordero index: {len(bordero_idx):,} FAC CODE entries, {len(bordero_polis_idx):,} Polis, {len(bordero_slip_idx):,} Slip", flush=True)
+
 
     # Diagnostik kolom kunci
     print("\n  --- Cek kolom SUSPEND ---", flush=True)
@@ -1122,18 +1391,26 @@ def run() -> None:
     global SLIPDB_FACODE_COL
     if   "FAC_CODE"      in slipdb_cols: SLIPDB_FACODE_COL = "FAC_CODE"
     elif "FAC CODE"      in slipdb_cols: SLIPDB_FACODE_COL = "FAC CODE"
+    elif "FAC. CODE"     in slipdb_cols: SLIPDB_FACODE_COL = "FAC. CODE"
     elif "CCOS_REF_CODE" in slipdb_cols: SLIPDB_FACODE_COL = "CCOS_REF_CODE"
 
     def _prepend(col, cols_list, header):
         return ([col] + cols_list) if col in header and col not in cols_list else cols_list
 
     # [TPI] Prepend kolom ORI ke daftar kolom bersih untuk referensi
-    polis_osbal  = _prepend("FAC_POLICY_NO_ORI", polis_osbal,  osbal_cols)
-    slip_osbal   = _prepend("FAC_SLIP_ORI",       slip_osbal,   osbal_cols)
-    polis_facul  = _prepend("FAC_POLICY_NO_ORI", polis_facul,  facul_cols)
-    slip_facul   = _prepend("FAC_SLIP_ORI",       slip_facul,   facul_cols)
-    polis_slipdb = _prepend("CLSDT_POLICY_NO",   polis_slipdb, slipdb_cols)
-    slip_slipdb  = _prepend("CLSDT_SLIP_NO",      slip_slipdb,  slipdb_cols)
+    polis_osbal   = _prepend("FAC_POLICY_NO_ORI", polis_osbal,   osbal_cols)
+    slip_osbal    = _prepend("FAC_SLIP_ORI",       slip_osbal,    osbal_cols)
+    insured_osbal = _prepend("FAC_INSURED_ORI",    insured_osbal, osbal_cols)
+
+    polis_facul   = _prepend("FAC_POLICY_NO_ORI", polis_facul,   facul_cols)
+    slip_facul    = _prepend("FAC_SLIP_ORI",       slip_facul,    facul_cols)
+    insured_facul = _prepend("FAC_INSURED_ORI",    insured_facul, facul_cols)
+
+    polis_slipdb  = _prepend("CLSDT_POLICY_NO",   polis_slipdb,  slipdb_cols)
+    slip_slipdb   = _prepend("CLSDT_SLIP_NO",      slip_slipdb,   slipdb_cols)
+
+    # [TPI] Masukkan INSURED_ORI ke insured_sus
+    insured_sus   = _prepend("INSURED_ORI",        insured_sus,   suspend_cols)
 
     print(f"  Kolom polis OSBAL     : {polis_osbal}", flush=True)
     print(f"  Kolom slip OSBAL      : {slip_osbal}", flush=True)
@@ -1146,6 +1423,16 @@ def run() -> None:
     lookup_slipdb = _build_lookup(slipdb_rows, polis_slipdb, slip_slipdb, insured_slipdb, SLIPDB_FACODE_COL, label="SLIPDB")
 
     facode_osbal_idx = lookup_osbal[9]
+
+    # [TPI] Pre-build index nomor slip digit-only di OSBAL untuk pencarian cepat Fallback Swap (O(1))
+    digit_slip_osbal_index: dict = {}
+    for idx_o, row_o in enumerate(osbal_rows):
+        for c in slip_osbal:
+            v_o = _normalize(row_o.get(c, ""))
+            if v_o:
+                d = re.sub(r'\D', '', v_o)
+                if d:
+                    digit_slip_osbal_index.setdefault(d, []).append(idx_o)
 
     # [4] Matching per baris
     total = len(suspend_rows)
@@ -1352,77 +1639,98 @@ def run() -> None:
         # =================================================================
         # FASE 3 (TPI = ACA FASE 3): Pencarian berdasarkan INSURED (fallback)
         # Hanya dijalankan jika FASE 1 & 2 tidak menghasilkan match.
+        # Aturan Prioritas:
+        #   Step 3A: Exact Match DULU di semua sumber (OSBAL -> SLIPDB -> FACUL)
+        #            mencakup semua INSURED_CLEAN_1..5 dan INSURED_ORI / FAC_INSURED_ORI
+        #   Step 3B: Jika SEMUA exact match nihil, baru jalankan LIKE match ketat
         # Ref: teknis_matching_aca.md §2 FASE 3
         # =================================================================
         if not matched_osbal_idx:
-            ins_vals = _collect_clean_values(sus, insured_sus)
+            ins_vals = _collect_all_values(sus, insured_sus, "insured_ori")
             if ins_vals:
                 slip_check_vals = _collect_clean_values(sus, eff_slip)
 
-                # 1. Coba OSBAL Exact & Like
-                osb_hits = _exact_match(ins_vals, lookup_osbal[2])
-                if not osb_hits and lookup_osbal[8] and lookup_osbal[8][0]:
-                    osb_hits = _like_match(
-                        ins_vals, lookup_osbal[8][0], osbal_rows, insured_osbal,
-                        stopwords=_INSURED_STOPWORDS,
-                        overlap_threshold=_INSURED_LIKE_THRESHOLD,
-                        match_log=_like_log,
-                    )
-                if osb_hits:
-                    matched_osbal_idx.update(osb_hits)
+                # --- STEP 3A: EXACT MATCH DULU DI SEMUA SUMBER ---
+                # 1. OSBAL Exact
+                osb_exact = _exact_match(ins_vals, lookup_osbal[2])
+                if osb_exact:
+                    matched_osbal_idx.update(osb_exact)
                     source = "OSBAL"
                     osb_slip_conf = any(
                         any(_normalize(osbal_rows[i].get(c, "")) in slip_check_vals
                             for c in slip_osbal if _normalize(osbal_rows[i].get(c, "")))
-                        for i in osb_hits
+                        for i in osb_exact
                     ) if slip_check_vals else False
                     scenario = "Slip + Insured" if osb_slip_conf else "Insured only"
 
-                # 2. Coba SLIPDB Exact & Like
+                # 2. SLIPDB Exact
                 elif slipdb_rows and not matched_osbal_idx:
-                    sld_hits = _exact_match(ins_vals, lookup_slipdb[2])
-                    if not sld_hits and lookup_slipdb[8] and lookup_slipdb[8][0]:
-                        sld_hits = _like_match(
+                    sld_exact = _exact_match(ins_vals, lookup_slipdb[2])
+                    if sld_exact:
+                        res_idx, _ = _resolve_facode([slipdb_rows[idx] for idx in sld_exact], SLIPDB_FACODE_COL, facode_osbal_idx, osbal_rows)
+                        if res_idx:
+                            matched_osbal_idx.update(res_idx)
+                            source = "SLIPDB"
+                            scenario = "Insured only"
+                            resolved = True
+
+                # 3. FACUL Exact
+                elif facul_rows and not matched_osbal_idx:
+                    fac_exact = _exact_match(ins_vals, lookup_facul[2])
+                    if fac_exact:
+                        res_idx, _ = _resolve_facode([facul_rows[idx] for idx in fac_exact], FACUL_FACODE_COL, facode_osbal_idx, osbal_rows)
+                        if res_idx:
+                            matched_osbal_idx.update(res_idx)
+                            source = "FACUL"
+                            scenario = "Insured only"
+                            resolved = True
+
+                # --- STEP 3B: JIKA SEMUA EXACT TIDAK KETEMU, BARU JALANKAN LIKE MATCH KETAT ---
+                if not matched_osbal_idx:
+                    # 1. OSBAL Like
+                    if lookup_osbal[8] and lookup_osbal[8][0]:
+                        osb_like = _like_match(
+                            ins_vals, lookup_osbal[8][0], osbal_rows, insured_osbal,
+                            stopwords=_INSURED_STOPWORDS,
+                            overlap_threshold=_INSURED_LIKE_THRESHOLD,
+                            match_log=_like_log,
+                        )
+                        if osb_like:
+                            matched_osbal_idx.update(osb_like)
+                            source = "OSBAL"
+                            scenario = "Insured only"
+
+                    # 2. SLIPDB Like
+                    if not matched_osbal_idx and slipdb_rows and lookup_slipdb[8] and lookup_slipdb[8][0]:
+                        sld_like = _like_match(
                             ins_vals, lookup_slipdb[8][0], slipdb_rows, insured_slipdb,
                             stopwords=_INSURED_STOPWORDS,
                             overlap_threshold=_INSURED_LIKE_THRESHOLD,
                             match_log=_like_log,
                         )
-                    if sld_hits:
-                        res_idx, _ = _resolve_facode([slipdb_rows[idx] for idx in sld_hits], SLIPDB_FACODE_COL, facode_osbal_idx, osbal_rows)
-                        if res_idx:
-                            matched_osbal_idx.update(res_idx)
-                            source = "SLIPDB"
-                            sld_slip_conf = any(
-                                any(_normalize(slipdb_rows[idx].get(c, "")) in slip_check_vals
-                                    for c in slip_slipdb if _normalize(slipdb_rows[idx].get(c, "")))
-                                for idx in sld_hits
-                            ) if slip_check_vals else False
-                            scenario = "Slip + Insured" if sld_slip_conf else "Insured only"
-                            resolved = True
+                        if sld_like:
+                            res_idx, _ = _resolve_facode([slipdb_rows[idx] for idx in sld_like], SLIPDB_FACODE_COL, facode_osbal_idx, osbal_rows)
+                            if res_idx:
+                                matched_osbal_idx.update(res_idx)
+                                source = "SLIPDB"
+                                scenario = "Insured only"
+                                resolved = True
 
-                # 3. Coba FACUL Exact & Like
-                elif facul_rows and not matched_osbal_idx:
-                    fac_hits = _exact_match(ins_vals, lookup_facul[2])
-                    if not fac_hits and lookup_facul[8] and lookup_facul[8][0]:
-                        fac_hits = _like_match(
+                    # 3. FACUL Like
+                    if not matched_osbal_idx and facul_rows and lookup_facul[8] and lookup_facul[8][0]:
+                        fac_like = _like_match(
                             ins_vals, lookup_facul[8][0], facul_rows, insured_facul,
                             stopwords=_INSURED_STOPWORDS,
                             overlap_threshold=_INSURED_LIKE_THRESHOLD,
                             match_log=_like_log,
                         )
-                    if fac_hits:
-                        res_idx, _ = _resolve_facode([facul_rows[idx] for idx in fac_hits], FACUL_FACODE_COL, facode_osbal_idx, osbal_rows)
-                        if res_idx:
-                            matched_osbal_idx.update(res_idx)
-                            source = "FACUL"
-                            fac_slip_conf = any(
-                                any(_normalize(facul_rows[idx].get(c, "")) in slip_check_vals
-                                    for c in slip_facul if _normalize(facul_rows[idx].get(c, "")))
-                                for idx in fac_hits
-                            ) if slip_check_vals else False
-                            scenario = "Slip + Insured" if fac_slip_conf else "Insured only"
-                            resolved = True
+                        if fac_like:
+                            res_idx, _ = _resolve_facode([facul_rows[idx] for idx in fac_like], FACUL_FACODE_COL, facode_osbal_idx, osbal_rows)
+                            if res_idx:
+                                matched_osbal_idx.update(res_idx)
+                                source = "FACUL"
+                                scenario = "Insured only"
+                                resolved = True
 
         # Fallback Slip: jika FASE 3 (Insured) tidak menghasilkan match,
         # gunakan kandidat slip FASE 2 agar tidak menjadi Unmatching (termasuk slip payung seperti 1100000030)
@@ -1431,6 +1739,30 @@ def run() -> None:
             source = fallback_slip_source
             scenario = "Slip only"
             resolved = fallback_slip_resolved
+
+        # [TPI] Fallback Swap Polis -> Slip: jika FASE 1-3 miss dan nomor polis berkarakteristik slip OSBAL (10-digit '51...')
+        if not matched_osbal_idx and polis_vals:
+            suspect_vals = [v for v in polis_vals if _is_suspect_polis_as_slip(v)]
+            if suspect_vals:
+                swap_hits = set()
+                for sv in suspect_vals:
+                    if sv in lookup_osbal[0]:
+                        swap_hits.update(lookup_osbal[0][sv])
+                    sv_num = re.sub(r'\D', '', str(sv))
+                    if sv_num in lookup_osbal[0]:
+                        swap_hits.update(lookup_osbal[0][sv_num])
+                    if sv_num in digit_slip_osbal_index:
+                        swap_hits.update(digit_slip_osbal_index[sv_num])
+
+                if swap_hits:
+                    matched_osbal_idx = set(swap_hits)
+                    source = "OSBAL"
+                    sus_ins_curr = _collect_all_values(sus, insured_sus, "insured_ori")
+                    sub_ins_confirmed = [idx for idx in swap_hits if _ref_matches_insured(osbal_rows[idx], insured_osbal, sus_ins_curr)]
+                    if sub_ins_confirmed:
+                        scenario = "Slip + Insured"
+                    else:
+                        scenario = "Slip only"
 
         # =================================================================
         # FASE 4: Narrowing Wajib (Currency & Periode) + Strict Rematch
@@ -1543,19 +1875,41 @@ def run() -> None:
                         insured_vals_before: set = set()
                         for _idx in list(matched_osbal_idx):
                             for _c in insured_osbal:
-                                _v = _normalize(osbal_rows[_idx].get(_c, ""))
-                                if _v:
-                                    insured_vals_before.add(_v)
+                                if _c != "FAC_INSURED_ORI":
+                                    _v = _normalize(osbal_rows[_idx].get(_c, ""))
+                                    if _v:
+                                        insured_vals_before.add(_v)
                         if len(insured_vals_before) > 1:
-                            base = scenario.replace(" only", "") if not scenario.endswith("only") else scenario
+                            base = scenario.replace(" only", "")
                             scenario = base + " + Insured"
 
             matched_osbal_idx = set(matched_list)
 
         # =================================================================
-        # [TPI] FASE Bordero Open Cover Override -- DIHAPUS UNTUK TPI
-        # TPI tidak memiliki data Open Cover Marine Cargo.
+        # FASE 6: BORDERO (Open Cover) OVERRIDE
+        # Teknik 2: Mencari kemungkinan match secara exact via Bordero
         # =================================================================
+        is_bordero = False
+        if bordero_idx and (found_by_polis or matched_osbal_idx or polis_vals):
+            bordero_facs, ok = _find_fac_codes_in_bordero(
+                sus, bordero_idx, eff_polis, slip_sus,
+                bordero_polis_index=bordero_polis_idx,
+                bordero_slip_index=bordero_slip_idx,
+            )
+            if ok and bordero_facs:
+                res_idx = []
+                for fac in bordero_facs:
+                    if fac in facode_osbal_idx:
+                        res_idx.extend(facode_osbal_idx[fac])
+
+                if res_idx:
+                    if set(res_idx) != matched_osbal_idx:
+                        matched_osbal_idx = set(res_idx)
+                    source = "OSBAL"
+                    is_bordero = True
+                    resolved = True
+                    if not scenario or scenario == "Unmatching":
+                        scenario = "Polis only"
 
         # Post-matching normalisasi label
         if is_beda_curr or is_beda_per:
@@ -1584,7 +1938,7 @@ def run() -> None:
             "suspend":        sus,
             "source":         source,
             "base_scenario":  scenario,
-            "is_bordero":     False,   # [TPI] tidak ada bordero
+            "is_bordero":     is_bordero,
             "is_beda_curr":   is_beda_curr,
             "is_beda_per":    is_beda_per,
             "osbal_idx":      list(matched_osbal_idx),
@@ -1601,11 +1955,6 @@ def run() -> None:
             elif _method == "SUBSET":  stat_like_subset  += 1
             elif _method == "OVERLAP": stat_like_overlap += 1
 
-    # [4c] Fac code claim & osbal accumulation (identik dengan ACA)
-    print("\n[4c/6] Fac code claim & osbal accumulation (row asli dipertahankan) ...", flush=True)
-
-    claimed: set = set()
-
     def _is_invalid_match(r):
         return (
             r.get("is_beda_curr", False)
@@ -1613,6 +1962,29 @@ def run() -> None:
             or r.get("source") is None
             or r.get("base_scenario", "") in ("Unmatching", "UNMATCHED")
         )
+
+    # [4b] Bordero narrowing (> 1 Fac -> exact NET)
+    # Teknik 1: Menyempitkan multi-FAC menggunakan data Bordero
+    if bordero_idx:
+        print("\n[4b/6] Bordero narrowing (> 1 Fac -> exact NET) ...", flush=True)
+        stat_narrowed_bordero = 0
+        for r in raw_results:
+            if len(r["fac_codes"]) > 1 and not _is_invalid_match(r):
+                narrowed, ok = _narrow_by_amount_net(r["suspend"], r["fac_codes"], bordero_idx)
+                if ok and len(narrowed) == 1:
+                    r["fac_codes"] = narrowed
+                    fac = next(iter(narrowed))
+                    r["osbal_idx"] = [i for i in r["osbal_idx"]
+                                      if _normalize(osbal_rows[i].get(OSBAL_FACODE_COL, "")) == fac]
+                    r["osbal_count"] = len(r["osbal_idx"])
+                    stat_narrowed_bordero += 1
+        if stat_narrowed_bordero > 0:
+            print(f"  -> {stat_narrowed_bordero} baris multi-FAC berhasil disempitkan via Bordero NET", flush=True)
+
+    # [4c] Fac code claim & osbal accumulation (identik dengan ACA)
+    print("\n[4c/6] Fac code claim & osbal accumulation (row asli dipertahankan) ...", flush=True)
+
+    claimed: set = set()
 
     for r in raw_results:
         if len(r["fac_codes"]) == 1 and not _is_invalid_match(r):
@@ -1676,6 +2048,7 @@ def run() -> None:
         final_scenario = _format_final_scenario(
             base_scenario=r.get("base_scenario", ""),
             source=r["source"],
+            is_bordero=r.get("is_bordero", False),
             is_beda_curr=r.get("is_beda_curr", False),
             is_beda_per=r.get("is_beda_per", False),
             num_fac=len(r["fac_codes"]),
